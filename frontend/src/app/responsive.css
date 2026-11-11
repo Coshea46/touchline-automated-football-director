@@ -1,0 +1,47 @@
+@media (max-width: 1100px) {
+  .app-header, .app-content { padding-left: 32px; padding-right: 32px; }
+  .watch-stage { gap: 16px; }
+}
+@media (max-width: 900px) {
+  .persistent-player.tile--main { grid-column: 1 / -1; }
+  .watch-sidebar { grid-column: 1 / -1; grid-row: 2; }
+  .watch-stage > .strip-toolbar { grid-row: 3; }
+  .persistent-player.tile--preview { grid-row: calc(4 + var(--preview-row)); }
+  .director-controls { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 14px 24px; }
+  .mode-field { flex-direction: row; align-items: center; }
+  .select-wrap select { width: 145px; }
+}
+@media (max-width: 760px) {
+  .app-header { padding: 18px 20px 10px; grid-template-columns: 1fr auto; gap: 12px; }
+  .brand { font-size: 22px; }
+  .main-nav { grid-column: 1 / -1; grid-row: 2; gap: 8px; }
+  .main-nav a { min-width: 78px; padding: 10px 17px; }
+  .header-actions { grid-column: 2; grid-row: 1; }
+}
+@media (max-width: 600px) {
+  .app-content { padding: 18px 16px 28px; }
+  .player-heading { margin-bottom: 16px; }
+  .director-panel { padding: 16px; }
+  .director-controls { gap: 13px; justify-content: space-between; }
+  .director-heading { width: 100%; justify-content: space-between; }
+  .mode-field { flex-wrap: wrap; gap: 8px; }
+  .mode-field > label { font-size: 12px; }
+  .director-state { flex: 1; min-width: 105px; text-align: right; font-size: 11px; }
+  .director-notes { font-size: 10px; gap: 5px 12px; }
+  .director-hold { width: 100%; font-size: 11px; }
+  .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .filmstrip--compact[style*='--match-count: 1'] { grid-template-columns: minmax(0, 1fr); max-width: 360px; }
+  .persistent-player.tile--preview { grid-column: calc(1 + var(--preview-column-mobile) * 6) / span 6; grid-row: calc(4 + var(--preview-row-mobile)); }
+  .tile__name { font-size: 12px; }
+  .tile__label { padding: 10px; }
+  .tile--main { border-radius: 17px; }
+  .selection-toast { width: max-content; max-width: calc(100vw - 30px); bottom: 15px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  .filmstrip .tile--preview:hover { transform: none; }
+}
+@media (forced-colors: active) {
+  .tile, .director-panel, .theme-toggle, .director-toggle, .icon-button, .primary-button { border: 1px solid ButtonText; }
+}

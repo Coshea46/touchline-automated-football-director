@@ -101,16 +101,24 @@ These are **short, bounded tests**, not a claim of multi-hour uptime or frame-pe
 
 ## Run Touchline locally
 
-You'll need **PowerShell**, **Node.js**, the application's Python environment, and the existing private Modal inference credentials if you want real ML monitoring. Run the commands from the project root.
+You'll need **PowerShell**, **Node.js** and **Python 3.12**, plus the existing private Modal inference credentials for real ML monitoring. Run these commands from the repository root.
+
+### Install once
+
+```powershell
+python -m venv backend/.venv
+& backend/.venv/Scripts/python.exe -m pip install -e "./backend[dev,modal]"
+npm.cmd --prefix frontend ci
+```
+
+The backend is an installed Python package. On Linux/macOS, use the executables in `backend/.venv/bin/` instead of `backend/.venv/Scripts/`. For captions, also create the separate environment described in [backend setup](backend/README.md#dependency-environments).
 
 ### Terminal 1 — Backend
 
 For a persistent local website with no automatic GPU start:
 
 ```powershell
-cd "C:\Users\oshea\non-one-drive-stuff\hack-the-burgh-2026\hack-the-burgh-2026-project"
-
-& backend/ml_inference/.venv-deploy/Scripts/python.exe -B -m backend.local
+& backend/.venv/Scripts/touchline-local.exe
 ```
 
 The site can play videos, show tables and news, and use configured commentary captions without turning on GPU monitoring. A controlling viewer can start the selected model by choosing **Auto On**.
@@ -118,7 +126,7 @@ The site can play videos, show tables and news, and use configured commentary ca
 To start a **bounded** real-model monitoring session automatically when playback connects, use this backend command instead:
 
 ```powershell
-& backend/ml_inference/.venv-deploy/Scripts/python.exe -B -m backend.local --allow-cloud --seconds 2400 --budget 10
+& backend/.venv/Scripts/touchline-local.exe --allow-cloud --seconds 2400 --budget 10
 ```
 
 This authorises up to 40 minutes and a **$10 estimated inference allowance**. It is not a provider-enforced billing cap. Do not run two backend sessions at once.
@@ -126,14 +134,12 @@ This authorises up to 40 minutes and a **$10 estimated inference allowance**. It
 ### Terminal 2 — Frontend
 
 ```powershell
-cd "C:\Users\oshea\non-one-drive-stuff\hack-the-burgh-2026\hack-the-burgh-2026-project"
-
 $env:PORT = '3030'
 $env:BROWSER = 'none'
 $env:REACT_APP_WS_URL = 'ws://127.0.0.1:8030'
 $env:REACT_APP_API_URL = 'http://127.0.0.1:8031'
 
-npm --prefix frontend/sports-streaming-service start
+npm.cmd --prefix frontend start
 ```
 
 Open **http://127.0.0.1:3030/**.
@@ -145,10 +151,10 @@ For a **provider-free UI check**, launch the backend with `--offline --no-captio
 A finite two-minute seven-match demo is also available:
 
 ```powershell
-& backend/ml_inference/.venv-deploy/Scripts/python.exe -B -m backend.demo --allow-cloud --matches 7 --seconds 120
+& backend/.venv/Scripts/touchline-demo.exe --allow-cloud --matches 7 --seconds 120
 ```
 
-Unlike `backend.local`, this demo command shuts down its backend when the timer ends.
+Unlike `touchline-local`, this demo command shuts down its backend when the timer ends.
 
 ### API keys (optional per feature)
 
@@ -162,7 +168,7 @@ ELEVENLABS_API_KEY=
 
 - **football-data.org** supplies the current league tables.
 - **The Guardian Open Platform** supplies real news metadata and source links.
-- **ElevenLabs Scribe v2 Realtime** transcribes the selected match's actual commentary. A separately installed caption runtime is required; see `.env.example` and `backend/requirements-captions.txt`.
+- **ElevenLabs Scribe v2 Realtime** transcribes the selected match's actual commentary. A separately installed caption runtime is required; see [backend setup](backend/README.md#dependency-environments), `.env.example` and `backend/requirements-captions.txt`.
 
 Keep credentials server-side. Never commit `.env`. Without a key, the relevant feature shows an explanatory unavailable state rather than invented data.
 
@@ -172,14 +178,33 @@ Live captions default to **On** with a valid key and active playback. Only the f
 
 | Area | Responsibility |
 |---|---|
-| `frontend/sports-streaming-service/` | React viewer, Auto Director controls, captions, tables and news |
-| `backend/replay/` | Session management, source clocks and director decisions |
-| `backend/ml_inference/` | Modal workers, incremental extraction, model loading and evaluation |
-| `backend/captions/` | ElevenLabs realtime transcription |
-| `backend/football_platform/` | League standings and football news APIs |
-| `frontend/sports-streaming-service/src/data/matches.json` | Canonical seven-match source/fixture metadata |
+| `frontend/src/app/` | Application shell, theme, navigation and ordered style imports |
+| `frontend/src/features/` | Watch playback/audio/director/session/source modules, captions, tables and news |
+| `frontend/src/shared/` | HTTP/WebSocket clients, connection events and reusable UI/styles |
+| `backend/src/touchline/api/` | HTTP and WebSocket transports plus application routes |
+| `backend/src/touchline/replay/` | Shared session, sources, director policy, configuration and caption/monitoring coordinators |
+| `backend/src/touchline/ml_inference/` | `features/`, `models/`, `streaming/`, `deployment/` and `window_api/`; frozen assets in `runtime/` |
+| `backend/src/touchline/captions/` | Focused realtime `live/` pipeline and separate optional saved `tracks/` pipeline |
+| `backend/src/touchline/football_platform/` | League standings and football news APIs |
+| `backend/src/touchline/data/matches.json` | Canonical seven-match source/fixture metadata |
+| `backend/src/touchline/tools/` | Current `cloud/`, `validation/`, `evaluation/` commands, shared `support/` and retained `legacy/` workflows |
+| `backend/tests/` | Domain unit/integration tests, synthetic `support/` helpers and fixtures outside the installed package |
+| `docs/` | Architecture, current inference guide and archived validation evidence |
+| `scripts/` | Fixture sync and offline package verification |
 
 The consumer-facing name is **Touchline**. Some internal names still start with `MATCHPULSE_` or `matchpulse-` so existing configuration and cloud resources continue to work.
+
+## Verify the checkout
+
+These checks use local dependencies and mocked providers:
+
+```powershell
+& backend/.venv/Scripts/python.exe -B -m pytest -c backend/pyproject.toml backend/tests
+npm.cmd --prefix frontend test -- --watchAll=false --runInBand
+npm.cmd --prefix frontend run build
+```
+
+See [backend setup](backend/README.md) for package builds, [architecture](docs/architecture.md) for runtime boundaries, and [scripts](scripts/README.md) for the installed-wheel check. [Inference documentation](docs/inference/README.md) separates current commands from historical cloud validation evidence.
 
 ## Current limitations
 

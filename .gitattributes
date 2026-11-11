@@ -1,0 +1,7 @@
+# These frozen release artifacts are verified byte-for-byte on both platforms.
+backend/src/touchline/ml_inference/runtime/audio_sampleclock_v3.py text eol=lf
+backend/src/touchline/ml_inference/runtime/selected_release/smoke-observation.json text eol=crlf
+backend/src/touchline/ml_inference/runtime/selected_release/smoke-verification.json text eol=crlf
+*.whl binary
+*.npy binary
+*.pt binary

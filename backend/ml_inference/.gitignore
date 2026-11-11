@@ -1,5 +1,0 @@
-.venv-deploy/
-.venv-client/
-artifacts/
-__pycache__/
-.pytest_cache/

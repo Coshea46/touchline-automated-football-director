@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "touchline-backend"
+version = "0.1.0"
+description = "Touchline's recorded-football Auto Director, captions and inference integration"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3==1.28.62",
+    "websockets==11.0.3",
+    "numpy>=1.24,<3",
+]
+
+[project.optional-dependencies]
+modal = ["modal==1.6.3"]
+dev = [
+    "pytest>=8,<10",
+    "build>=1,<2",
+    "av==17.1.0",
+    "scipy>=1.13,<2",
+    "opencv-python-headless==4.14.0.94",
+]
+
+[project.scripts]
+touchline-local = "touchline.local:main"
+touchline-demo = "touchline.demo:main"
+touchline-captions = "touchline.captions.tracks.cli:main"
+touchline-probe = "touchline.tools.validation.replay_probe:main"
+touchline-evaluate-director = "touchline.tools.evaluation.director:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+touchline = ["data/*.json"]
+"touchline.ml_inference" = [
+    "runtime/*.json",
+    "runtime/*.whl",
+    "runtime/*.py",
+    "runtime/selected_release/*",
+]
+"touchline.ml_inference.deployment" = ["requirements-worker.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider --import-mode=importlib"
+markers = [
+    "integration: offline collaboration between components or local subprocesses",
+]

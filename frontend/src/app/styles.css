@@ -1,0 +1,15 @@
+/* Preserve the original global cascade. Cross-feature breakpoint overrides stay last in each group. */
+@import './theme.css';
+@import './shell.css';
+@import '../features/watch/director/DirectorPanel.css';
+@import '../features/watch/playback/players.css';
+@import '../shared/styles/content.css';
+@import '../features/watch/SelectionNotice.css';
+@import './accessibility.css';
+@import './responsive.css';
+@import '../shared/styles/platform.css';
+@import '../features/tables/TablesPage.css';
+@import '../features/news/NewsPage.css';
+@import '../features/watch/playback/ReplayScore.css';
+@import '../features/captions/CommentaryCaptions.css';
+@import './platform-responsive.css';

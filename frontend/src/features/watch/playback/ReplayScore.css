@@ -1,0 +1,7 @@
+.replay-scoreline { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.replay-scoreline:empty { display: none; }
+.replay-scoreline strong { padding: 5px 10px; border-radius: 9px; background: var(--glass); color: var(--text); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile__label .replay-scoreline { margin-top: 7px; }
+.tile__label .replay-scoreline strong { padding: 3px 7px; font-size: 13px; }
+.provisional-label { color: var(--muted); font-size: 11px; line-height: 1.4; }
+

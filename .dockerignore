@@ -1,16 +1,18 @@
-**
-!backend/
-!backend/**
-!frontend/
-!frontend/sports-streaming-service/
-!frontend/sports-streaming-service/src/
-!frontend/sports-streaming-service/src/data/
-!frontend/sports-streaming-service/src/data/matches.json
+.git
+.idea
+.codex
+.agents
+.aws
+**/node_modules
+**/build
+**/dist
+**/*.egg-info
 **/.venv*
 **/__pycache__
 **/.pytest_cache
 **/.ruff_cache
 **/artifacts
+**/coverage
 **/.env
 **/.env.*
 **/*.pt
@@ -19,3 +21,7 @@
 **/*.wav
 **/*.npy
 **/*.npz
+!**/.env.example
+# Required packaged smoke input, never arbitrary model weights or footage.
+!backend/src/touchline/ml_inference/runtime/selected_release/smoke-raw.npy
+frontend/src/data/matches.json

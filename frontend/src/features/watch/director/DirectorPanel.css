@@ -1,0 +1,24 @@
+.director-panel { min-width: 0; background: var(--glass); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); backdrop-filter: blur(16px); }
+.director-controls { display: flex; align-items: stretch; flex-direction: column; gap: 18px; }
+.director-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.director-heading h2 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.15px; }
+.director-toggle { min-height: 38px; min-width: 82px; padding: 7px 10px; background: var(--surface); border-color: var(--line); font-size: 12px; }
+.director-toggle:disabled { opacity: .6; cursor: not-allowed; }
+.toggle-track { display: block; width: 31px; height: 18px; padding: 3px; border-radius: 20px; background: var(--soft); }
+.toggle-track i { display: block; width: 12px; height: 12px; border-radius: 50%; background: white; transition: transform 140ms ease; }
+.toggle-track.is-on { background: var(--blue); }
+.toggle-track.is-on i { transform: translateX(13px); }
+.mode-field { display: flex; align-items: stretch; flex-direction: column; gap: 8px; }
+.mode-field > label { font-size: 12px; color: var(--muted); }
+.select-wrap { position: relative; }
+.select-wrap select { appearance: none; min-height: 40px; width: 100%; padding: 9px 31px 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer; }
+.select-wrap select:disabled { opacity: .58; cursor: not-allowed; }
+.select-wrap > svg { position: absolute; top: 11px; right: 10px; color: var(--muted); pointer-events: none; }
+.director-state { font-size: 12px; color: var(--muted); margin: 0; }
+.director-state:empty { display: none; }
+.director-hold { font-size: 12px; color: var(--accent); }
+.director-notes { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 18px; margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.director-notes p { margin: 0; }
+.director-rules { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.director-notice, .mode-notice { margin: 9px 0 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.mode-notice { color: var(--accent); }
