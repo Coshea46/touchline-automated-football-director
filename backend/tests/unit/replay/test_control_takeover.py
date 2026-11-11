@@ -15,7 +15,7 @@ def claim(session, client='observer', **values):
 
 async def setup():
     clock, bridge, captions, published = Clock(), FakeBridge(), CaptionWorker(), []
-    session = await ReplaySession(SourceRegistry.from_env({'MATCHPULSE_MATCH_COUNT': '2'}),
+    session = await ReplaySession(SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MATCH_COUNT': '2'}),
         config=configuration(max_duration_seconds=2400, max_estimated_cost_usd=20),
         bridge=bridge, caption_worker=captions, now=clock, monotonic=clock,
         session_id='session', publish=published.append).initialize()

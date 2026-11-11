@@ -7,7 +7,7 @@ from touchline.replay import MatchSource, SourceRegistry
 
 
 def test_shared_fixture_catalog_preserves_seven_distinct_original_mappings():
-    registry = SourceRegistry.from_env({})
+    registry = SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'})
     resolved = registry.resolve()
     assert len({source.source_url for source in resolved}) == 7
     assert resolved[0].label == "Chelsea vs Swansea City"

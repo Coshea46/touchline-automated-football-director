@@ -72,7 +72,8 @@ class AppController:
                 # Only confirmed demo bucket/object bindings may use the demo's
                 # source-bound transcripts. Custom cam-1 recordings stay isolated.
                 sources = tuple(source for source in self.session.sources if source.metadata)
-                self.caption_service = CaptionService.from_metadata(METADATA_PATH, sources=sources)
+                self.caption_service = CaptionService.from_metadata(
+                    METADATA_PATH, sources=sources, source_provider=lambda: self.session.sources)
                 self.api_manager = HTTPServer.from_env(extra_routes={"/api/captions": self._captions})
                 self.api_manager.host, self.api_manager.port = self.api_host, self.api_port
                 await self.api_manager.start()

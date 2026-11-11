@@ -16,7 +16,7 @@ async def setup(*, bridge=None, factory=None, seconds=120, budget=1):
     prepared = SessionConfig(monitor=True, mode='real', model_version=NEW_MODEL_VERSION,
         checkpoint=NEW_MODEL_VERSION, max_duration_seconds=seconds, max_estimated_cost_usd=budget,
         max_restarts=0, gpu_workers=4)
-    registry = SourceRegistry.from_env({'MATCHPULSE_MATCH_COUNT': '7',
+    registry = SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MATCH_COUNT': '7',
         'MATCHPULSE_OFFSETS_JSON': '{"cam-1":10.5,"cam-3":31.25}'})
     session = await ReplaySession(registry, config=SessionConfig(), prepared_config=prepared,
         bridge=bridge, bridge_factory=factory, caption_worker=captions,
@@ -260,7 +260,7 @@ def test_prepared_service_caps_cannot_exceed_user_allowance(seconds, budget):
         prepared = SessionConfig(monitor=True, mode='real', checkpoint=NEW_MODEL_VERSION,
             model_version=NEW_MODEL_VERSION, max_duration_seconds=seconds,
             max_estimated_cost_usd=budget, max_restarts=0)
-        ReplaySession(SourceRegistry.from_env({}), prepared_config=prepared)
+        ReplaySession(SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'}), prepared_config=prepared)
 
 
 def test_authorized_forty_minute_prepared_service_is_available_without_spending_or_starting():

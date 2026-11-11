@@ -17,7 +17,7 @@ DEFAULT_TRACK_DIR = ARTIFACTS_DIR / "captions"
 class CaptionService:
     def __init__(self, track_dir=None, sources=None, identities=None, *,
                  identity_checker=verify_source_identity, identity_ttl_seconds=300,
-                 now=time.monotonic, wall_now=time.time):
+                 now=time.monotonic, wall_now=time.time, source_provider=None):
         self.track_dir = Path(track_dir or os.environ.get("MATCHPULSE_CAPTION_DIR") or DEFAULT_TRACK_DIR)
         if sources is None:
             from touchline.replay.sources import SourceRegistry
@@ -27,10 +27,18 @@ class CaptionService:
                             for key, value in sources.items()}
             self.source_urls = {key: value.get("source_url") for key, value in sources.items()
                                 if isinstance(value, dict)}
+            self.source_identity_urls = {key: value.get("source_identity_url") for key, value in sources.items()
+                                         if isinstance(value, dict)}
         else:
+            sources = tuple(sources)
             self.sources = {source.match_id: source.key for source in sources}
             self.source_urls = {source.match_id: source.source_url for source in sources}
+            self.source_identity_urls = {source.match_id: getattr(source, "head_url", None)
+                                         for source in sources}
         self.identities = dict(identities or {})
+        if source_provider is not None and not callable(source_provider):
+            raise TypeError("Caption source provider must be callable")
+        self._source_provider = source_provider
         if not 0 <= identity_ttl_seconds <= 300:
             raise ValueError("Caption identity cache must expire within 300 seconds")
         self._checker, self._ttl, self._now = identity_checker, identity_ttl_seconds, now
@@ -42,16 +50,62 @@ class CaptionService:
         metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
         records = metadata.get("matches", metadata) if isinstance(metadata, dict) else metadata
         configured = {item["match_id"]: item["source_key"] for item in records}
-        identities = {item["match_id"]: item["source_identity"] for item in records
-                      if item.get("source_identity")}
-        return cls(track_dir, sources if sources is not None else configured, identities, **kwargs)
+        catalog_identities = {item["match_id"]: item["source_identity"] for item in records
+                              if item.get("source_identity")}
+        if sources is None:
+            return cls(track_dir, configured, catalog_identities, **kwargs)
+        sources = sources if isinstance(sources, dict) else tuple(sources)
+        entries = sources.items() if isinstance(sources, dict) else ((item.match_id, item) for item in sources)
+        identities = {}
+        for match_id, source in entries:
+            if isinstance(source, dict):
+                key, url = source.get("source_key"), source.get("source_url")
+                actual = source.get("identity") or source.get("source_identity")
+                bound_metadata = source.get("metadata") or {}
+            elif isinstance(source, str):
+                key, url, actual, bound_metadata = source, None, None, {}
+            else:
+                key, url = source.key, source.source_url
+                actual, bound_metadata = getattr(source, "identity", None), getattr(source, "metadata", None) or {}
+            if key != configured.get(match_id):
+                continue
+            actual = actual or bound_metadata.get("source_identity")
+            if actual:
+                identities[match_id] = actual
+                continue
+            # A catalog digest belongs to its original object locator. Matching
+            # a cam ID/key in a new bucket alone must not reuse old captions.
+            old = catalog_identities.get(match_id)
+            if isinstance(old, dict) and url:
+                try:
+                    candidate = source_identity(key, old.get("etag"), old.get("content_length"), url)
+                except (TypeError, ValueError):
+                    continue
+                if candidate["digest"] == old.get("digest"):
+                    identities[match_id] = old
+        return cls(track_dir, sources, identities, **kwargs)
 
     def _current_identity(self, match_id, configured_key):
         with self._identity_lock:
             cached = self._cache.get(match_id)
             if cached and self._now() < cached[0]:
                 return cached[1], cached[0]
-            current = self._checker(configured_key, self.source_urls.get(match_id))
+            source_url = self.source_urls.get(match_id)
+            identity_url = self.source_identity_urls.get(match_id)
+            binding_valid = True
+            if self._source_provider is not None:
+                source = next((item for item in self._source_provider() if item.match_id == match_id), None)
+                binding_valid = source is not None and source.key == configured_key
+                if binding_valid:
+                    source_url, identity_url = source.source_url, getattr(source, "head_url", None)
+            if not binding_valid:
+                current = None
+            elif identity_url is None:
+                # Public sources and injected two-argument checkers retain
+                # their original interface.
+                current = self._checker(configured_key, source_url)
+            else:
+                current = self._checker(configured_key, source_url, identity_url)
             if isinstance(current, dict):
                 current = current.get("digest")
             # Failed HEADs are cached briefly too; never hammer a missing object.

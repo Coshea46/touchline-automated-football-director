@@ -16,7 +16,7 @@ def test_platform_http_and_replay_websocket_share_a_clean_lifecycle_without_clou
     monkeypatch.setenv("MATCHPULSE_API_ALLOWED_ORIGINS", "http://localhost:3030")
 
     async def scenario():
-        controller = AppController(registry=SourceRegistry.from_env({}), config=SessionConfig(),
+        controller = AppController(registry=SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'}), config=SessionConfig(),
                                    host="127.0.0.1", port=0, api_port=0, api_enabled=True)
         task = asyncio.create_task(controller.start())
 

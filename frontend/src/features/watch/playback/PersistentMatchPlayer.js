@@ -1,10 +1,13 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { getVideoUrl, sourceOffset } from '../sources/feeds';
+import { sourceOffset } from '../sources/feeds';
 import { SOURCE_LOAD_EVENT, SOURCE_READY_EVENT } from './useSourcePlayback';
 import ReplayScore from './ReplayScore';
+import useMediaAuthorization from './useMediaAuthorization';
 
 const ALIGNMENT_SECONDS = .15;
 const WARM_SEEK_SECONDS = .5;
+const AUTHORIZATION_ALIGNMENT_SECONDS = .001;
+const MAX_AUTHORIZATION_SEEKS = 3;
 
 // Each registered source owns one native element for its whole lifetime. Focus
 // changes only presentation/clock ownership; a warm aligned source never reloads.
@@ -21,25 +24,33 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
-  const source = getVideoUrl(feed);
+  const authorization = useMediaAuthorization(feed, clock);
+  const source = authorization.url;
+  const identity = authorization.identity;
+  const recoverAuthorization = authorization.recover;
   const offset = sourceOffset(feed);
   const cameraId = feed.cameraId;
   props.current = { feed, focused, focusedRef, clock, onPlayback, onAvailability, mediaRef,
-    inferenceBuffering, audioAllowed, previewsPaused, watching };
+    inferenceBuffering, audioAllowed, previewsPaused, watching, source, identity };
 
   useLayoutEffect(() => {
     const video = ref.current;
     const replayClock = clock.current;
     const state = runtime.current;
+    state.authorizationReload = Boolean(state.identity === identity && state.source
+      && (state.source !== source || state.authorizationReload));
+    state.authorizationSeeks = 0;
+    state.identity = identity;
+    state.source = source;
     let disposed = false;
     let requestedPlay = false;
     const active = () => {
       const current = props.current;
       return current.focused && (!current.focusedRef || current.focusedRef.current === current.feed.id);
     };
-    const silence = () => {
+    const silence = ({ preserveOwnership = false } = {}) => {
       video.defaultMuted = true;
-      video.matchpulseAudioOwned = false;
+      if (!preserveOwnership) video.matchpulseAudioOwned = false;
       if (!video.muted) video.muted = true;
     };
     const audio = () => {
@@ -68,7 +79,8 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
       state.ready = false;
       state.seekTarget = null;
       video.matchpulseReadySource = null;
-      silence();
+      video.matchpulseReadyIdentity = null;
+      silence({ preserveOwnership: active() && props.current.audioAllowed });
       setFailed(true); setLoading(false);
       props.current.onAvailability?.(cameraId, false);
       if (active()) {
@@ -102,8 +114,10 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
       state.pendingExternal = null;
       state.externalApplied = false;
       state.needsAlignment = false;
+      state.authorizationReload = false;
       state.ready = true;
       video.matchpulseReadySource = `${source}\n${cameraId}`;
+      video.matchpulseReadyIdentity = identity;
       setLoading(false); setFailed(false);
       if (active()) {
         clock.current.available = true;
@@ -118,11 +132,18 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
     };
     const seek = (target) => {
       if (video.seeking || state.seekTarget !== null) return false;
+      if (state.authorizationReload && active()) {
+        // A decoder may expose only coarse seek positions. Fail normally rather
+        // than loop or report a fabricated clock ahead of its decoded source.
+        if (state.authorizationSeeks >= MAX_AUTHORIZATION_SEEKS) { unavailable(); pause(); return false; }
+        state.authorizationSeeks += 1;
+      }
       state.ready = false;
       state.needsAlignment = true;
       state.seekTarget = target;
       if (state.pendingExternal !== null) state.externalApplied = true;
       video.matchpulseReadySource = null;
+      video.matchpulseReadyIdentity = null;
       video.dispatchEvent(new Event(SOURCE_LOAD_EVENT));
       if (active()) {
         setLoading(true);
@@ -145,7 +166,10 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
       if (Number.isFinite(video.duration) && target >= video.duration) { unavailable(); pause(); return; }
       if (video.seeking || state.seekTarget !== null) return;
       const difference = target - video.currentTime;
-      const threshold = externalTarget !== null && !state.externalApplied ? .001
+      // Same-source renewal must not use the 150ms warm-handoff tolerance:
+      // the backend treats backward movement over 1ms as an actual user seek.
+      const threshold = state.authorizationReload && isActive ? AUTHORIZATION_ALIGNMENT_SECONDS
+        : externalTarget !== null && !state.externalApplied ? .001
         : isActive || promotion || externalTarget !== null ? ALIGNMENT_SECONDS : WARM_SEEK_SECONDS;
       if (Math.abs(difference) > threshold) {
         seek(target);
@@ -162,6 +186,7 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
     };
     const metadata = () => {
       if (disposed) return;
+      if (video.currentSrc && video.currentSrc !== source) return;
       state.metadata = true;
       sync();
     };
@@ -177,9 +202,10 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
     };
     const seeking = () => {
       if (disposed) return;
-      const userSeek = state.seekTarget === null;
+      const userSeek = state.seekTarget === null && !state.needsAlignment;
       state.ready = false;
       video.matchpulseReadySource = null;
+      video.matchpulseReadyIdentity = null;
       if (active()) {
         if (userSeek) clock.current.time = Math.max(0, video.currentTime - offset);
         clock.current.stalled = true;
@@ -208,11 +234,13 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
     const stalled = () => {
       state.ready = false;
       video.matchpulseReadySource = null;
+      video.matchpulseReadyIdentity = null;
       if (active()) { clock.current.stalled = true; report(); }
     };
     const ended = () => {
       state.ready = false;
       video.matchpulseReadySource = null;
+      video.matchpulseReadyIdentity = null;
       silence();
       if (active()) {
         clock.current.playing = false; clock.current.ended = true;
@@ -221,20 +249,34 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
     };
     const volume = () => { if (!active()) silence(); else sample(); };
     const rate = () => { if (active()) report(); };
+    const mediaError = () => {
+      if (!recoverAuthorization()) { unavailable(); return; }
+      state.ready = false;
+      video.matchpulseReadySource = null;
+      video.matchpulseReadyIdentity = null;
+      if (active()) { clock.current.stalled = true; report(); }
+    };
     const listeners = { loadedmetadata: metadata, loadeddata: decoded, canplay: decoded, seeked: decoded,
       seeking, timeupdate: sample, ratechange: rate, volumechange: volume, play: playing, playing,
-      pause: paused, waiting: stalled, stalled, ended, error: unavailable };
+      pause: paused, waiting: stalled, stalled, ended, error: mediaError };
     Object.entries(listeners).forEach(([name, handler]) => video.addEventListener(name, handler));
     actions.current = { sync, sample, audio, silence, completed, pause };
     state.ready = false; state.failed = false; state.seekTarget = null; state.needsAlignment = true;
     video.matchpulseReadySource = null;
+    video.matchpulseReadyIdentity = null;
+    video.matchpulseSourceIdentity = identity;
     setLoading(true); setFailed(false);
     const changed = video.getAttribute('src') !== source;
     const retryRequested = retry !== appliedRetry.current;
     appliedRetry.current = retry;
     state.metadata = !changed && video.readyState >= 1;
-    if (changed || retryRequested) video.dispatchEvent(new Event(SOURCE_LOAD_EVENT));
-    if (changed) video.src = source;
+    if (source && (changed || retryRequested)) video.dispatchEvent(new Event(SOURCE_LOAD_EVENT));
+    if (!source) {
+      state.metadata = false;
+      silence();
+      if (video.hasAttribute('src')) { video.removeAttribute('src'); video.load(); }
+      if (active()) { clock.current.available = false; clock.current.stalled = true; }
+    } else if (changed) video.src = source;
     else if (retryRequested) { state.metadata = false; video.load(); }
     else sync();
     const timer = setInterval(() => { if (!active()) sync(); }, 250);
@@ -244,10 +286,10 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
       if (replayClock.sample === sample) delete replayClock.sample;
       if (actions.current?.sample === sample) actions.current = null;
       Object.entries(listeners).forEach(([name, handler]) => video.removeEventListener(name, handler));
-      silence();
+      silence({ preserveOwnership: props.current.identity === identity && props.current.source !== source });
       pause();
     };
-  }, [source, offset, cameraId, clock, retry]);
+  }, [source, identity, offset, cameraId, clock, retry, recoverAuthorization]);
 
   useLayoutEffect(() => {
     registerPlayer?.(cameraId, ref.current);
@@ -268,11 +310,11 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
       if (!runtime.current.ready) { setLoading(true); props.current.onPlayback?.(); }
     } else current.silence();
     return () => {
-      current.silence();
+      current.silence({ preserveOwnership: props.current.identity === identity && props.current.source !== source });
       if (replayClock.sample === current.sample) delete replayClock.sample;
       if (mediaRef?.current === video) mediaRef.current = null;
     };
-  }, [focused, focusedRef, feed.id, source, offset, cameraId, mediaRef, clock]);
+  }, [focused, focusedRef, feed.id, source, identity, offset, cameraId, mediaRef, clock]);
 
   useLayoutEffect(() => {
     const active = focused && (!focusedRef || focusedRef.current === feed.id);
@@ -308,6 +350,7 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
     runtime.current.needsAlignment = true;
     runtime.current.ready = false;
     ref.current.matchpulseReadySource = null;
+    ref.current.matchpulseReadyIdentity = null;
     ref.current.dispatchEvent(new Event(SOURCE_LOAD_EVENT));
     if (active) {
       clock.current.stalled = true;

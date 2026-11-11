@@ -13,6 +13,17 @@ def canonical_json(value):
 def digest(value):
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
+def source_locator(source_url):
+    """Stable HTTPS object locator, independent of expiring authorization."""
+    if not isinstance(source_url, str) or len(source_url) > 16384:
+        raise ValueError("Invalid caption source locator")
+    parsed = urlsplit(source_url)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+            or parsed.password or parsed.fragment):
+        raise ValueError("Invalid caption source locator")
+    return urlunsplit((parsed.scheme, parsed.netloc.lower(), parsed.path, "", ""))
+
+
 def source_identity(source_key, etag, content_length, source_url):
     """ETags identify object versions; multipart ETags are not media checksums.
 
@@ -25,21 +36,26 @@ def source_identity(source_key, etag, content_length, source_url):
         raise ValueError("A verified source ETag is required")
     if isinstance(content_length, bool) or not isinstance(content_length, int) or content_length <= 0:
         raise ValueError("A verified source length is required")
-    parsed = urlsplit(source_url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("Invalid caption source locator")
-    locator = urlunsplit((parsed.scheme, parsed.netloc.lower(), parsed.path, "", ""))
+    locator = source_locator(source_url)
     record = {"source_key": source_key, "etag": etag.strip('"'),
               "content_length": content_length,
               "locator_sha256": hashlib.sha256(locator.encode()).hexdigest()}
     return {**record, "digest": digest(record)}
 
-def verify_source_identity(source_key, source_url):
-    """A bounded HEAD checks object version and locator without fetching media."""
+def verify_source_identity(source_key, source_url, source_identity_url=None):
+    """Check object headers using independently authorized HEAD credentials.
+
+    GET and HEAD presigns are method-specific. A supplied HEAD URL must refer to
+    the same object as the media GET URL; neither query contributes to identity.
+    """
     if not source_url:
         return None
     try:
-        with urlopen(Request(source_url, method="HEAD"), timeout=4) as response:
+        locator = source_locator(source_url)
+        head_url = source_url if source_identity_url is None else source_identity_url
+        if source_locator(head_url) != locator:
+            return None
+        with urlopen(Request(head_url, method="HEAD"), timeout=4) as response:
             return source_identity(source_key, response.headers.get("ETag"),
                                    int(response.headers.get("Content-Length", "0")), source_url)["digest"]
     except (HTTPError, URLError, OSError, TypeError, ValueError):

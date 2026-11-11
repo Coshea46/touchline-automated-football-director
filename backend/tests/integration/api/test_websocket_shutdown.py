@@ -11,13 +11,13 @@ from touchline.api.websocket import WebSocketManager
 
 
 async def offline_session():
-    return await ReplaySession(SourceRegistry.from_env({'MATCHPULSE_MATCH_COUNT': '1'}),
+    return await ReplaySession(SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MATCH_COUNT': '1'}),
                                config=SessionConfig()).initialize()
 
 
 def test_cancelling_app_with_connected_viewer_finishes_and_cleans_up_session():
     async def scenario():
-        controller = AppController(registry=SourceRegistry.from_env({'MATCHPULSE_MATCH_COUNT': '1'}),
+        controller = AppController(registry=SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MATCH_COUNT': '1'}),
                                    config=SessionConfig(), host='127.0.0.1', port=0)
         serving = asyncio.create_task(controller.start())
         while controller.ws_manager.server is None:

@@ -8,7 +8,12 @@ import time
 from dataclasses import dataclass, field, replace
 from urllib.parse import quote, urlsplit
 
-from touchline.match_metadata import metadata_for_source
+from touchline.captions.identity import source_identity, source_locator
+from touchline.config.video_sources import (
+    LEGACY_PUBLIC_BUCKET, VIDEO_BUCKET, VIDEO_REGION, VIDEO_READER_ROLE, VIDEO_SOURCE_ACCESS,
+)
+from touchline.match_metadata import is_attested_mirror, metadata_for_source
+from touchline.storage import S3Access, StorageAuthorizationError
 
 
 def number(value, name, *, minimum=0, maximum=float("inf")):
@@ -39,6 +44,8 @@ class MatchSource:
     playback_url: str | None = field(default=None, repr=False)
     expires_at: float | None = None
     metadata: dict | None = field(default=None, repr=False, compare=False)
+    head_url: str | None = field(default=None, repr=False, compare=False)
+    identity: dict | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         if not isinstance(self.match_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.match_id):
@@ -53,6 +60,8 @@ class MatchSource:
             media_url(self.source_url)
         if self.playback_url is not None:
             media_url(self.playback_url)
+        if self.head_url is not None:
+            media_url(self.head_url)
         if self.expires_at is not None:
             number(self.expires_at, "expires_at")
         if self.key is None and self.source_url is None:
@@ -68,9 +77,14 @@ class MatchSource:
     def public_spec(self, healthy=True):
         result = {"match_id": self.match_id, "label": self.label, "url": self.playback_url,
                   "offset_seconds": self.offset_seconds, "healthy": bool(healthy), "source_key": self.key}
+        if self.expires_at is not None:
+            result["url_expires_at"] = self.expires_at
+        identity = self.identity or (self.metadata or {}).get("source_identity")
+        if identity:
+            result["source_identity"] = identity.get("digest")
         if self.metadata:
             result["metadata"] = self.metadata
-            result["source_identity"] = self.metadata.get("source_identity", {}).get("digest")
+            result["fixture_verified"] = True
         return result
 
 
@@ -82,8 +96,9 @@ class SourceRegistry:
     A refreshed URL doesn't alter match identity or the source-time offset.
     """
 
-    def __init__(self, sources, *, bucket="match-switcher-poc-videos", region="eu-west-2",
-                 access="public", url_ttl_seconds=3600, s3_client=None, now=time.time):
+    def __init__(self, sources, *, bucket=LEGACY_PUBLIC_BUCKET, region=VIDEO_REGION,
+                 access="public", url_ttl_seconds=3600, s3_client=None, s3_access=None,
+                 aws_env=None, now=time.time):
         self.sources = tuple(sources)
         if not 1 <= len(self.sources) <= 7:
             raise ValueError("Configure between one and seven matches")
@@ -98,11 +113,21 @@ class SourceRegistry:
         number(url_ttl_seconds, "url_ttl_seconds", minimum=120, maximum=21600)
         self.bucket, self.region, self.access = bucket, region, access
         self.url_ttl_seconds, self._s3, self.now = int(url_ttl_seconds), s3_client, now
+        self._access = s3_access
+        credential_env = os.environ if aws_env is None else aws_env
+        self._aws_env = dict(credential_env)
+        self._token_provider = ((lambda: credential_env.get("MODAL_IDENTITY_TOKEN"))
+                                if credential_env.get("MODAL_IDENTITY_TOKEN") else None)
+        if self.bucket == VIDEO_BUCKET:
+            self._aws_env.setdefault("AWS_ROLE_ARN", VIDEO_READER_ROLE)
+        self._aws_env.setdefault("AWS_DEFAULT_REGION", self.region)
         self._resolved = ()
+        self._identity_pins = {}
 
     @classmethod
     def from_env(cls, env=None):
         env = os.environ if env is None else env
+        bucket = env.get("S3_BUCKET_NAME") or VIDEO_BUCKET
         raw = env.get("MATCHPULSE_SOURCES_JSON")
         if raw:
             try:
@@ -125,19 +150,19 @@ class SourceRegistry:
                 sources = []
                 for i in range(1, count + 1):
                     match_id, key = f"cam-{i}", f"match-{i}.mp4"
-                    metadata = metadata_for_source(match_id, key, env.get("S3_BUCKET_NAME") or "match-switcher-poc-videos")
+                    metadata = metadata_for_source(match_id, key, bucket)
                     sources.append(MatchSource(match_id, metadata["display_name"] if metadata else f"Match {i}",
                                                offsets.get(match_id, 0), key=key, metadata=metadata))
             except (ValueError, TypeError) as exc:
                 raise ValueError("Invalid MATCHPULSE_OFFSETS_JSON") from exc
-        return cls(sources, bucket=env.get("S3_BUCKET_NAME") or "match-switcher-poc-videos",
-                   region=env.get("AWS_DEFAULT_REGION") or "eu-west-2",
-                   access=env.get("MATCHPULSE_SOURCE_ACCESS", "public"),
-                   url_ttl_seconds=int(env.get("MATCHPULSE_SOURCE_URL_TTL", "3600")))
+        return cls(sources, bucket=bucket,
+                   region=env.get("AWS_DEFAULT_REGION") or env.get("AWS_REGION") or VIDEO_REGION,
+                   access=env.get("MATCHPULSE_SOURCE_ACCESS") or VIDEO_SOURCE_ACCESS,
+                   url_ttl_seconds=int(env.get("MATCHPULSE_SOURCE_URL_TTL", "3600")), aws_env=env)
 
     def resolve(self):
-        now = self.now()
         resolved = []
+        pins = dict(self._identity_pins)
         for source in self.sources:
             # Internal IDs alone never identify a custom source as one of the
             # historical demo fixtures. Match the actual bucket/object binding.
@@ -146,25 +171,57 @@ class SourceRegistry:
                 resolved.append(replace(source, playback_url=source.playback_url or source.source_url))
                 continue
             if self.access == "presigned":
-                if self._s3 is None:
-                    import boto3
-                    from botocore.config import Config
-
-                    self._s3 = boto3.client("s3", region_name=self.region,
-                                           config=Config(signature_version="s3v4",
-                                                         connect_timeout=3, read_timeout=5,
-                                                         retries={"max_attempts": 2}))
-                url = self._s3.generate_presigned_url("get_object", Params={
-                    "Bucket": self.bucket, "Key": source.key}, ExpiresIn=self.url_ttl_seconds)
-                expires_at = now + self.url_ttl_seconds
+                try:
+                    if self._access is None and self._s3 is None:
+                        self._access = S3Access(env=self._aws_env, region=self.region,
+                                                now=self.now, token_provider=self._token_provider)
+                    client = self._s3 if self._s3 is not None else self._access.get_client()
+                    head = client.head_object(Bucket=self.bucket, Key=source.key)
+                    if self._access is not None:
+                        get = self._access.presign_get(self.bucket, source.key, self.url_ttl_seconds)
+                        probe = self._access.presign_head(self.bucket, source.key, self.url_ttl_seconds)
+                        url, head_url = get.url, probe.url
+                        expires_at = min(get.expires_at, probe.expires_at)
+                    else:
+                        # Explicit injected clients are intended for deterministic
+                        # offline adapters; production uses the expiry-aware access layer.
+                        params = {"Bucket": self.bucket, "Key": source.key}
+                        url = client.generate_presigned_url("get_object", Params=params, ExpiresIn=self.url_ttl_seconds)
+                        head_url = client.generate_presigned_url("head_object", Params=params, ExpiresIn=self.url_ttl_seconds)
+                        expires_at = self.now() + self.url_ttl_seconds
+                    identity = source_identity(source.key, head.get("ETag"), head.get("ContentLength"), url)
+                    if source_locator(head_url) != source_locator(url):
+                        raise StorageAuthorizationError("source_authorization_locator_mismatch")
+                    old = pins.get(source.match_id)
+                    if old is not None and old != identity["digest"]:
+                        raise StorageAuthorizationError("source_object_changed")
+                    metadata = metadata_for_source(source.match_id, source.key, self.bucket,
+                                                   verified_identity=identity, region=self.region)
+                    if is_attested_mirror(self.bucket, self.region) and metadata is None:
+                        raise StorageAuthorizationError("source_copy_metadata_mismatch")
+                    pins[source.match_id] = identity["digest"]
+                except StorageAuthorizationError:
+                    raise
+                except Exception:
+                    # Credential, SDK and URL errors must not disclose signed queries.
+                    raise StorageAuthorizationError("source_access_unavailable") from None
+                label = metadata["display_name"] if metadata else source.label
+                resolved.append(replace(source, source_url=url, playback_url=url, head_url=head_url,
+                                        expires_at=expires_at, identity=identity, metadata=metadata, label=label))
+                continue
             else:
                 url = f"https://{self.bucket}.s3.{self.region}.amazonaws.com/{quote(source.key, safe='/')}"
                 expires_at = None
             media_url(url)
             resolved.append(replace(source, source_url=url, playback_url=url, expires_at=expires_at))
         self._resolved = tuple(resolved)
+        self._identity_pins = pins
         return self._resolved
 
     def needs_refresh(self):
         return any(source.key is not None and source.expires_at is not None and source.expires_at - self.now() <= 60
                    for source in self._resolved)
+
+    def close(self):
+        if self._access is not None:
+            self._access.close()

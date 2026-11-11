@@ -39,11 +39,58 @@ def _catalog():
     return records
 
 
-def metadata_for_source(match_id, source_key, bucket=DEFAULT_BUCKET):
-    if bucket != DEFAULT_BUCKET:
-        return None
+def metadata_for_source(match_id, source_key, bucket=DEFAULT_BUCKET, *, verified_identity=None, region="eu-west-2"):
     record = _catalog().get(match_id)
-    return deepcopy(record) if record and record["source_key"] == source_key else None
+    if not record or record["source_key"] != source_key:
+        return None
+    if bucket == DEFAULT_BUCKET:
+        if verified_identity is not None and verified_identity != record.get("source_identity"):
+            return None
+        return deepcopy(record)
+    # A same-named cam/key is insufficient. Mirror semantics require the owner's
+    # explicit copy attestation plus authenticated destination metadata. Preserve
+    # the original inspected identity as provenance; never invent destination IDs.
+    binding = next((item for item in _source_bindings()
+                    if item.get("bucket") == bucket and item.get("region") == region
+                    and item.get("verification") == "operator_confirmed_unmodified_copy"
+                    and item.get("reference_bucket") == DEFAULT_BUCKET), None)
+    original = record.get("source_identity", {})
+    if (binding is None or not isinstance(verified_identity, dict)
+            or verified_identity.get("source_key") != source_key
+            or verified_identity.get("content_length") != original.get("content_length")
+            or not isinstance(verified_identity.get("etag"), str)
+            or not verified_identity["etag"]
+            or any(not isinstance(verified_identity.get(field), str)
+                   or re.fullmatch(r"[a-f0-9]{64}", verified_identity[field]) is None
+                   for field in ("digest", "locator_sha256"))):
+        return None
+    result = deepcopy(record)
+    result["origin_source_identity"] = result["source_identity"]
+    result["source_identity"] = deepcopy(verified_identity)
+    result["source_binding"] = {
+        "bucket": bucket, "region": region,
+        "verification": binding["verification"], "content_length_checked": True,
+        "full_file_checksum_verified": False,
+    }
+    return result
+
+
+def is_attested_mirror(bucket, region):
+    return any(item.get("bucket") == bucket and item.get("region") == region
+               and item.get("verification") == "operator_confirmed_unmodified_copy"
+               and item.get("reference_bucket") == DEFAULT_BUCKET
+               for item in _source_bindings())
+
+
+@lru_cache(maxsize=1)
+def _source_bindings():
+    data = json.loads(METADATA_PATH.read_text(encoding="utf-8"))
+    bindings = data.get("source_bindings", [])
+    if not isinstance(bindings, list) or any(not isinstance(item, dict) for item in bindings):
+        raise ValueError("Invalid source bindings")
+    if len({item.get("bucket") for item in bindings}) != len(bindings):
+        raise ValueError("Duplicate source binding bucket")
+    return tuple(bindings)
 
 
 def replay_score_at(record, source_seconds):

@@ -19,7 +19,7 @@ export function readSession(message, previous) {
     || !Number.isFinite(message.playback?.position) || message.playback.position < 0
     || (message.playback.clock_epoch !== undefined && !validSequence(message.playback.clock_epoch))
     || (previous?.session_id === message.session_id && message.sequence <= previous.sequence)) return null;
-  const feeds = registeredFeeds(message.matches);
+  const feeds = registeredFeeds(message.matches, message.server_time);
   if (!feeds.length || feeds.length !== message.matches.length) return null;
   return { ...message, feeds };
 }

@@ -7,11 +7,10 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from urllib.parse import urlsplit
 from touchline.captions.live.events import MAX_CAPTION_WORD_CHARS, bounded_caption_event, compact_transcript
 from touchline.captions.limits import DEFAULT_AUDIO_SECONDS, DEFAULT_COST_USD, LIVE_PRICE_PER_HOUR_USD, validate_limits
 from touchline.captions.errors import CaptionError
-from touchline.captions.identity import verify_source_identity
+from touchline.captions.identity import source_locator, verify_source_identity
 
 
 from .connection import LIVE_MODEL, PROVIDER_ERROR_CODES, official_connect
@@ -30,10 +29,13 @@ def valid_control(control, wall_now=time.time):
             or type(control.get("clock_epoch")) is not int or control["clock_epoch"] < 0
             or not re.fullmatch(r"[a-f0-9]{64}", str(control.get("source_identity", "")))):
         return False
+    source_expiry = control.get("source_url_expires_at")
+    if source_expiry is not None and (not _finite(source_expiry) or source_expiry < 0):
+        return False
     try:
-        parsed = urlsplit(control.get("source_url", ""))
-        return (parsed.scheme == "https" and bool(parsed.hostname) and not parsed.username
-                and not parsed.password and len(control["source_url"]) <= 16384)
+        locator = source_locator(control.get("source_url"))
+        head_url = control.get("source_identity_url")
+        return head_url is None or source_locator(head_url) == locator
     except (TypeError, ValueError):
         return False
 
@@ -55,6 +57,7 @@ class RealtimeEngine:
         self.closed = False
         self.metrics = {"provider_sessions": 0, "provider_connected_seconds": 0.0, "pcm_seconds": 0.0,
                         "estimated_cost_usd": 0.0, "errors": 0, "generation_changes": 0,
+                        "audio_source_reopens": 0,
                         "forced_provider_closes": 0,
                         "provider_session_started": False, "provider_close_code": None,
                         "transcript_compactions": 0, "last_provider_text_chars": 0,
@@ -95,7 +98,12 @@ class RealtimeEngine:
 
     @staticmethod
     def _token(control):
-        return tuple(control.get(key) for key in ("session_id", "generation", "match_id", "clock_epoch", "source_url"))
+        try:
+            locator = source_locator(control.get("source_url"))
+        except (TypeError, ValueError):
+            locator = None
+        return (*[control.get(key) for key in ("session_id", "generation", "match_id", "clock_epoch",
+                                              "source_key", "source_identity")], locator)
 
     def _current(self, token):
         control = self.control_reader()
@@ -149,7 +157,9 @@ class RealtimeEngine:
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
-            self._executor.shutdown(wait=False, cancel_futures=True)
+            # Pending decoder closes must run even when a blocked open/pull is
+            # finishing after cancellation. Only one native operation is queued.
+            self._executor.shutdown(wait=False, cancel_futures=False)
 
     async def _stream(self, initial):
         token = self._token(initial)
@@ -171,14 +181,16 @@ class RealtimeEngine:
                 finish_state, finish_reason = "stopped", "budget_exhausted"
                 return
             self.emit(initial, "connecting")
-            cache_key = (initial["source_key"], initial["source_url"], initial["source_identity"])
+            cache_key = (initial["source_key"], source_locator(initial["source_url"]), initial["source_identity"])
             cached = self._identity_cache.get(cache_key)
             if cached and cached[0] > self.now():
                 identity = cached[1]
             else:
-                identity = await loop.run_in_executor(self._executor, self.identity_checker,
-                                                       initial["source_key"], initial["source_url"])
-                self._identity_cache[cache_key] = (self.now() + 300, identity)
+                identity_args = (initial["source_key"], initial["source_url"])
+                if initial.get("source_identity_url") is not None:
+                    identity_args += (initial["source_identity_url"],)
+                identity = await loop.run_in_executor(self._executor, self.identity_checker, *identity_args)
+                self._identity_cache[cache_key] = (self.now() + (300 if identity else 5), identity)
                 if len(self._identity_cache) > 16:
                     self._identity_cache.pop(next(iter(self._identity_cache)))
             if identity != initial["source_identity"]:
@@ -190,8 +202,10 @@ class RealtimeEngine:
                 return
             # Open only at the actually reported source point, never five or
             # thirty seconds ahead. The single executor bounds decode work.
-            opening = self._executor.submit(self.audio_factory, latest["source_url"],
-                                             latest["offset_seconds"] + latest["position"])
+            reader_url = latest["source_url"]
+            reader_expiry = latest.get("source_url_expires_at")
+            reader_start = latest["offset_seconds"] + latest["position"]
+            opening = self._executor.submit(self.audio_factory, reader_url, reader_start)
             reader = await asyncio.shield(asyncio.wrap_future(opening))
             if not self._current(token):
                 return
@@ -272,6 +286,34 @@ class RealtimeEngine:
                 if self._over_budget():
                     finish_state, finish_reason = "stopped", "budget_exhausted"
                     break
+                refreshed_expiry = control.get("source_url_expires_at")
+                if (_finite(reader_expiry) and reader_expiry - self.wall_now() <= 15
+                        and control["source_url"] != reader_url and _finite(refreshed_expiry)
+                        and refreshed_expiry > self.wall_now() + 15):
+                    # Range requests made by an old decoder may outlive its GET
+                    # signature. Retire only that decoder; Scribe timestamps and
+                    # the aggregate allowance continue from the last sent PCM.
+                    closing = self._executor.submit(reader.close)
+                    reader, opening = None, None
+                    await asyncio.shield(asyncio.wrap_future(closing))
+                    current = self._current(token)
+                    if not current or self._over_budget():
+                        break
+                    if failed.is_set():
+                        raise CaptionError(error_reason[0])
+                    reader_url = current["source_url"]
+                    reader_expiry = current.get("source_url_expires_at")
+                    if not _finite(reader_expiry) or reader_expiry <= self.wall_now():
+                        raise CaptionError("source_authorization_expired")
+                    opening = self._executor.submit(self.audio_factory, reader_url,
+                        sent_end if sent_end is not None else reader_start)
+                    reader = await asyncio.shield(asyncio.wrap_future(opening))
+                    control = self._current(token)
+                    if not control or self._over_budget():
+                        break
+                    if failed.is_set():
+                        raise CaptionError(error_reason[0])
+                    self.metrics["audio_source_reopens"] += 1
                 permitted = control["offset_seconds"] + control["position"]
                 remaining = max(0, self.max_audio - self.metrics["pcm_seconds"])
                 chunk = await loop.run_in_executor(self._executor, reader.pull, permitted, min(.25, remaining))

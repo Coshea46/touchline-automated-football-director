@@ -56,6 +56,12 @@ The optional saved-track CLI lives under `touchline.captions.tracks.cli`;
 `main.py` composes the application; `local.py` and `demo.py` remain its launchers.
 `paths.py` and `data/` locate writable state and packaged metadata.
 
+`storage/` obtains temporary AWS credentials and signs private video reads. The
+default bucket, reader role and setup are documented in [private S3 access](../docs/private-s3.md).
+Local private playback needs an authenticated AWS profile; a Modal container uses
+its injected OIDC identity. `--offline --no-captions` disables inference and
+transcription while video access still requires S3 authorization.
+
 The documented package-root imports from `touchline.replay`,
 `touchline.captions` and `touchline.ml_inference` remain available, including
 `SessionConfig`, `CaptionService`, `InferenceConfig`, `InferenceService` and

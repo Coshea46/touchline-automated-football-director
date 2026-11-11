@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { getVideoUrl, sourceOffset } from '../sources/feeds';
+import { getVideoUrl, playbackIdentity, sourceOffset } from '../sources/feeds';
 import { validRecommendation } from '../session/replayProtocol';
 
 export default function usePlayerHandoff({ focusedId, setFocusedId, clock, session, send, feedsRef,
@@ -77,7 +77,8 @@ export default function usePlayerHandoff({ focusedId, setFocusedId, clock, sessi
       // Never replace visible football with an automatic loading screen.
       // An unready proposal is discarded; a future fresh prediction can retry.
       if (!video || video.readyState < 2 || video.seeking
-        || video.matchpulseReadySource !== `${getVideoUrl(feed)}\n${feed.cameraId}`
+        || ('matchpulseReadyIdentity' in video ? video.matchpulseReadyIdentity !== playbackIdentity(feed)
+          : video.matchpulseReadySource !== `${getVideoUrl(feed)}\n${feed.cameraId}`)
         || Math.abs(actualTime - clock.current.time) > 0.15
         || !validRecommendation(recommendation, { ...session.current, sequence: recommendation.sequence - 1 },
           { ...clock.current, time: actualTime, stalled: false, available: true })) {

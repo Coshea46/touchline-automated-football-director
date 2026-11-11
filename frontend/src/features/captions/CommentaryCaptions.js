@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Captions } from 'lucide-react';
 import { apiGet } from '../../shared/api/platformApi';
-import { getVideoUrl } from '../watch/sources/feeds';
+import { getVideoUrl, playbackIdentity } from '../watch/sources/feeds';
 import { captionAt, readCaptionTrack } from './captions';
 import useSourcePlayback, { SOURCE_LOAD_EVENT } from '../watch/playback/useSourcePlayback';
 import { captionSessionEnded, liveCaptionStatus } from './liveCaptions';
@@ -18,8 +18,8 @@ export default function CommentaryCaptions({ feed, mediaRef, live, enabled: cont
   const [result, setResult] = useState(null);
   const captionTextRef = useRef(null);
   const { cameraId, sourceKey, sourceIdentity } = feed;
-  const source = `${getVideoUrl(feed)}\n${feed.cameraId}\n${feed.sourceKey || ''}\n${feed.sourceIdentity || ''}`;
-  const time = useSourcePlayback(mediaRef, source, enabled);
+  const source = playbackIdentity(feed);
+  const time = useSourcePlayback(mediaRef, `${getVideoUrl(feed)}\n${feed.cameraId}`, enabled, source);
   useEffect(() => {
     try {
       localStorage.setItem('matchpulse-captions-enabled', String(enabled));

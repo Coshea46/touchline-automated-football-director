@@ -89,14 +89,19 @@ class CaptionCoordinator:
         source = next((item for item in session.sources if item.match_id == match_id), None)
         if source is None:
             return None
-        identity = source.metadata.get("source_identity", {}).get("digest") if source.metadata else None
-        return {"session_id": session.session_id, "match_id": match_id, "source_key": source.key,
+        identity = (source.identity or (source.metadata or {}).get("source_identity") or {}).get("digest")
+        view = {"session_id": session.session_id, "match_id": match_id, "source_key": source.key,
                 "source_identity": identity, "source_url": source.source_url,
                 "offset_seconds": source.offset_seconds, "position": session.position, "playing": True,
                 "rate": session.rate, "stalled": False, "available": True, "active": True, "enabled": True,
                 "clock_epoch": session.clock_epoch, "generation": session._caption_generation,
                 "expires_at": session.now() + max(0, 5 - (session.monotonic() - session.last_report_at)),
                 "report_received_at": session._caption_report_received_at, "deadline": session._caption_deadline}
+        if source.head_url:
+            view["source_identity_url"] = source.head_url
+        if source.expires_at is not None:
+            view["source_url_expires_at"] = source.expires_at
+        return view
 
     def _update_captions(self):
         session = self.session
@@ -108,7 +113,8 @@ class CaptionCoordinator:
             session._publish_session()
             return
         source = next((item for item in session.sources if item.match_id == session._caption_actual_match_id), None)
-        identity = source.metadata.get("source_identity", {}).get("digest") if source and source.metadata else None
+        identity = ((source.identity or (source.metadata or {}).get("source_identity") or {}).get("digest")
+                    if source else None)
         if session._caption_enabled and source is not None and (not isinstance(identity, str)
                 or re.fullmatch(r"[a-f0-9]{64}", identity) is None):
             session._caption_enabled = False

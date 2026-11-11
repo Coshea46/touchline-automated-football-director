@@ -22,6 +22,18 @@ def test_missing_local_file_is_optional(tmp_path):
     assert load_local_environment(tmp_path / ".env", {}) == 0
 
 
+def test_private_video_bucket_and_profile_are_loaded_without_overwriting_shell_settings(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text("S3_BUCKET_NAME=private-recordings\nAWS_PROFILE=touchline-local\n"
+                    "AWS_ROLE_ARN=arn:aws:iam::709860105019:role/TouchlineVideoReader\n"
+                    "MATCHPULSE_SOURCE_ACCESS=presigned\n", encoding="utf-8")
+    env = {"AWS_PROFILE": "already-selected"}
+    assert load_local_environment(path, env) == 3
+    assert env["S3_BUCKET_NAME"] == "private-recordings"
+    assert env["AWS_PROFILE"] == "already-selected"
+    assert env["MATCHPULSE_SOURCE_ACCESS"] == "presigned"
+
+
 def test_invalid_configuration_never_includes_the_value_in_errors(tmp_path):
     path = tmp_path / ".env"
     path.write_text('ELEVENLABS_API_KEY="do-not-disclose', encoding="utf-8")

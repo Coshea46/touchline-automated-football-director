@@ -47,7 +47,7 @@ def test_persistent_websocket_and_tables_news_api_survive_bounded_inference_and_
         bridge, captions, clock = FakeBridge(), CaptionWorker(), Clock()
         config = SessionConfig(monitor=True, mode='features_mock', model_version='mock-v1',
                                max_duration_seconds=10, max_estimated_cost_usd=1, max_restarts=0)
-        controller = AppController(registry=SourceRegistry.from_env({}), config=config, bridge=bridge,
+        controller = AppController(registry=SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'}), config=config, bridge=bridge,
                                    host='127.0.0.1', port=0, api_port=0, api_enabled=True, caption_worker=captions)
         session = controller.session
         session.now, session.monotonic = clock, clock

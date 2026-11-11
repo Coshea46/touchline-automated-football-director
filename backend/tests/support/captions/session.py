@@ -33,7 +33,7 @@ class CaptionWorker:
 async def setup(*, config=None, worker=None, registry=None):
     clock, published = Clock(), []
     worker = worker or CaptionWorker()
-    session = await ReplaySession(registry or SourceRegistry.from_env({"MATCHPULSE_MATCH_COUNT": "2"}),
+    session = await ReplaySession(registry or SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', "MATCHPULSE_MATCH_COUNT": "2"}),
         config=config or SessionConfig(), bridge=FakeBridge(), caption_worker=worker,
         caption_max_audio_seconds=30, caption_max_cost_usd=.01,
         now=clock, monotonic=clock, session_id="session", publish=published.append).initialize()

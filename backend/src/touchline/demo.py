@@ -82,8 +82,10 @@ def configuration(matches, seconds, offline, *, model="selected", director_mode=
         raise ValueError("Choose a finite per-launch budget between $0.01 and $3")
     if not offline and budget_usd is not None and budget_usd < allowance:
         raise ValueError("Session duration and worker count exceed the per-launch budget")
-    registry = SourceRegistry.from_env({"MATCHPULSE_MATCH_COUNT": str(matches),
-        "MATCHPULSE_OFFSETS_JSON": json.dumps({f"cam-{i}": 120 for i in range(1, matches + 1)})})
+    source_environment = dict(os.environ)
+    source_environment.update(MATCHPULSE_MATCH_COUNT=str(matches),
+        MATCHPULSE_OFFSETS_JSON=json.dumps({f"cam-{i}": 120 for i in range(1, matches + 1)}))
+    registry = SourceRegistry.from_env(source_environment)
     config = SessionConfig(monitor=not offline, mode="disabled" if offline else "real",
         model_version="disabled" if offline else checkpoint,
         checkpoint=None if offline else checkpoint,

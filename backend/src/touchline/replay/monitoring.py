@@ -4,16 +4,120 @@ import logging
 import asyncio
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from touchline.ml_inference.streaming.contract import MATCHES_PER_GPU
 
 
 from touchline.replay.diagnostics import worker_diagnostics, transient_transport_error
 
 logger = logging.getLogger(__name__)
+SOURCE_CLEANUP_TIMEOUT_SECONDS = 2
 
 class MonitoringCoordinator:
     def __init__(self, session):
         self.session = session
+
+    def _source_executor(self):
+        session = self.session
+        if session._source_refresh_executor is None:
+            session._source_refresh_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="source-access")
+        return session._source_refresh_executor
+
+    def _schedule_source_refresh(self, now):
+        session = self.session
+        if session._closing:
+            return
+        task = session._source_refresh_task
+        if task is not None:
+            if not task.done():
+                return
+            if not task.cancelled():
+                task.exception()  # Retrieve a completed task's outcome before retiring it.
+            session._source_refresh_task = None
+        future = session._source_refresh_future
+        if future is not None and not future.done():
+            return
+        if session.registry.needs_refresh() and now >= session._source_refresh_retry_at:
+            session._source_refresh_future = self._source_executor().submit(session.registry.resolve)
+            session._source_refresh_task = asyncio.create_task(self._complete_source_refresh(), name="replay-source-refresh")
+
+    async def _complete_source_refresh(self):
+        session = self.session
+        try:
+            sources = await asyncio.wrap_future(session._source_refresh_future)
+            if session._closing:
+                return
+            session.sources = tuple(sources)
+            session._source_refresh_failures = 0
+            session._source_refresh_retry_at = 0.0
+            session._sources_changed = True
+            if (session.state == "degraded" and session.error_code == "source_refresh_failed"
+                    and not (session._finished or session._ended or session._stop_requested)):
+                if not session.config.monitor:
+                    restored = "disabled"
+                elif session._worker_ready and session._handle is not None:
+                    restored = "running" if session.playing else "paused"
+                    if session.playing and not all(session.director.healthy.values()):
+                        restored = "degraded"
+                elif session._handle is not None or session._start_inflight is not None:
+                    restored = "starting"
+                elif not session.playing and session._monitor_started_at is not None:
+                    restored = "paused"
+                else:
+                    restored = "waiting"
+                # Publish the recovered state and complete source set together.
+                session.state, session.error_code = restored, None
+            session._publish_session()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - provider errors may contain credentials.
+            if not session._closing:
+                session._source_refresh_failures += 1
+                delay = min(60, 5 * 2 ** min(session._source_refresh_failures - 1, 4))
+                session._source_refresh_retry_at = session.monotonic() + delay
+                logger.warning("Media authorisation refresh failed (%s)", type(exc).__name__)
+                if (session.state not in ("error", "ended", "stopped")
+                        and session.error_code in (None, "source_refresh_failed")):
+                    session._set_state("degraded", "source_refresh_failed")
+
+    async def close_sources(self):
+        """Bound shutdown while serializing client close after any native refresh."""
+        session = self.session
+        task = session._source_refresh_task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            session._source_refresh_task = None
+        close = getattr(session.registry, "close", None)
+        executor = session._source_refresh_executor
+        try:
+            if callable(close):
+                executor = self._source_executor()
+                # A cancelled asyncio waiter cannot stop a running SDK thread.
+                # The same executor queues close after resolve has finished.
+                session._source_cleanup_future = executor.submit(close)
+                session.metrics["source_cleanup_confirmed"] = False
+                session._source_cleanup_waiter = asyncio.wrap_future(session._source_cleanup_future)
+
+                def finished(waiter):
+                    if not waiter.cancelled():
+                        error = waiter.exception()  # Consume deferred failures without exposing provider text.
+                        session.metrics["source_cleanup_confirmed"] = error is None
+                        if error is not None and session.metrics.get("source_cleanup_deferred"):
+                            logger.warning("Deferred source cleanup did not complete (%s)", type(error).__name__)
+
+                session._source_cleanup_waiter.add_done_callback(finished)
+                await asyncio.wait_for(asyncio.shield(session._source_cleanup_waiter),
+                                       timeout=SOURCE_CLEANUP_TIMEOUT_SECONDS)
+        except TimeoutError:
+            session.metrics["source_cleanup_deferred"] = True
+            logger.warning("Source access cleanup deferred until outstanding work completes")
+        except Exception as exc:  # noqa: BLE001 - never log provider exception text.
+            session.metrics["source_cleanup_confirmed"] = False
+            logger.warning("Source access cleanup did not complete (%s)", type(exc).__name__)
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=False)
 
     @property
     def auto_starting(self):
@@ -257,14 +361,7 @@ class MonitoringCoordinator:
         now = session.monotonic()
         if session._activation_requested and not session._controller_report_pending:
             await session._activate_prepared_monitoring()
-        if session.registry.needs_refresh():
-            try:
-                session.sources = await asyncio.to_thread(session.registry.resolve)
-                session._sources_changed = True
-                session._publish_session()
-            except Exception as exc:  # noqa: BLE001 - URL/credential errors stay private
-                logger.warning("Media authorisation refresh failed (%s)", type(exc).__name__)
-                session._set_state("degraded", "source_refresh_failed")
+        self._schedule_source_refresh(now)
         if not session.config.monitor:
             return
         if (session._monitor_started_at is not None
@@ -317,6 +414,12 @@ class MonitoringCoordinator:
             await session._control_rpc(session.control())
             session._sources_changed = False
             if session._worker_ready and session._ready_at is not None and now - session._ready_at > 1:
+                if (session.state in ("error", "ended", "stopped")
+                        or session.error_code not in (None, "source_refresh_failed")):
+                    return
+                if session._source_refresh_failures:
+                    session._set_state("degraded", "source_refresh_failed")
+                    return
                 state = "running" if session.playing else "paused"
                 if session.playing and not all(session.director.healthy.values()):
                     state = "degraded"
@@ -409,7 +512,11 @@ class MonitoringCoordinator:
         if snapshot.get("state") in ("ready", "running") and not session._worker_ready:
             session._worker_ready = True
             session._ready_at = session.monotonic()
-            session._set_state("running")
+            if session.error_code in (None, "source_refresh_failed"):
+                if session._source_refresh_failures:
+                    session._set_state("degraded", "source_refresh_failed")
+                else:
+                    session._set_state("running")
         started = time.perf_counter()
         previous_health = session.director.healthy.copy()
         changed = session.director.ingest(snapshot, now=session.now(), playback_position=session.position)

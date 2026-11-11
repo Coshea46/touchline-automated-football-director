@@ -42,7 +42,7 @@ Application and operational entry points are installed by `backend/pyproject.tom
 
 | Command | Module | Role |
 |---|---|---|
-| `touchline-local` | `touchline.local` | Persistent local backend; `--offline --no-captions` is the provider-free launch |
+| `touchline-local` | `touchline.local` | Persistent local backend; `--offline --no-captions` disables inference/transcription while private playback still needs AWS access |
 | `touchline-demo` | `touchline.demo` | Finite demo with an explicit score/runtime mode |
 | `touchline-captions` | `touchline.captions.tracks.cli` | Optional saved-track CLI; provider execution is explicit |
 | `touchline-probe` | `touchline.tools.validation.replay_probe` | Bounded inference replay probe |

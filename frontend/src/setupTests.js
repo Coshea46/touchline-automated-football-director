@@ -4,6 +4,10 @@
 // learn more: https://github.com/testing-library/jest-dom
 import '@testing-library/jest-dom';
 
+// The existing playback contract suite uses explicit, provider-free public fixtures.
+// Private-default coverage imports the source module without this opt-in separately.
+process.env.REACT_APP_SOURCE_ACCESS = 'public';
+
 // jsdom doesn't implement media playback
 window.HTMLMediaElement.prototype.play = () => Promise.resolve();
 window.HTMLMediaElement.prototype.pause = () => {};

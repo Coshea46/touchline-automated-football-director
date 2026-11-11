@@ -1,5 +1,20 @@
 {
   "schema_version": 1,
+  "source_bindings": [
+    {
+      "bucket": "match-switcher-poc-videos",
+      "region": "eu-west-2",
+      "verification": "footage_inspected"
+    },
+    {
+      "bucket": "touchline-videos-709860105019-eu-west-2-an",
+      "region": "eu-west-2",
+      "verification": "operator_confirmed_unmodified_copy",
+      "reference_bucket": "match-switcher-poc-videos",
+      "validation_required": "authenticated_head_and_matching_content_length",
+      "notes": "Owner confirmed these are the original seven recordings from the old bucket. Destination ETags and identities must be read from S3; none are assumed here. This is not an independent full-file checksum verification."
+    }
+  ],
   "matches": [
     {
       "match_id": "cam-1",

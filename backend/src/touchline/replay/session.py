@@ -67,6 +67,13 @@ class ReplaySession:
         self._restarts = 0
         self._retry_at = 0.0
         self._sources_changed = True
+        self._source_refresh_retry_at = 0.0
+        self._source_refresh_failures = 0
+        self._source_refresh_task = None
+        self._source_refresh_future = None
+        self._source_refresh_executor = None
+        self._source_cleanup_future = None
+        self._source_cleanup_waiter = None
         self._tasks = []
         self._last_recommendation = None
         self._last_ack_sequence = None
@@ -113,28 +120,39 @@ class ReplaySession:
         self.worker_health = {}
 
     async def initialize(self):
-        self.sources = await asyncio.to_thread(self.registry.resolve)
-        if self.config.gpu_workers is not None and self.config.gpu_workers > len(self.sources):
-            raise ValueError("gpu_workers cannot exceed registered source count")
-        self.director = Director([source.match_id for source in self.sources],
-                                 session_id=self.session_id, model_version=self.config.model_version,
-                                 mode=self.config.mode, director_mode=self.config.director_mode,
-                                 emergency_enabled=self.config.director_emergency_enabled,
-                                 emergency_margin=self.config.director_emergency_margin)
-        self._model_health = dict(self.director.healthy)
-        if self._prepared_config is not None and not self.config.monitor:
-            self.director.set_auto(False)
-        if self.config.mock_scores is not None and set(self.config.mock_scores) - set(self.director.match_ids):
-            raise ValueError("Mock score configured for an unregistered match")
-        if self.config.monitor and self.bridge is None:
-            # Default startup never imports or authenticates the Modal SDK.
-            if self.config.replay_transport == "websocket":
-                from touchline.ml_inference.streaming.ws_client import ReplayWebSocketClient
-                self.bridge = ReplayWebSocketClient.from_env()
-            else:
-                from touchline.ml_inference.streaming.client import ReplayClient
-                self.bridge = ReplayClient()
-        return self
+        try:
+            self.sources = await asyncio.wrap_future(self.monitoring._source_executor().submit(self.registry.resolve))
+            if self.config.gpu_workers is not None and self.config.gpu_workers > len(self.sources):
+                raise ValueError("gpu_workers cannot exceed registered source count")
+            self.director = Director([source.match_id for source in self.sources],
+                                     session_id=self.session_id, model_version=self.config.model_version,
+                                     mode=self.config.mode, director_mode=self.config.director_mode,
+                                     emergency_enabled=self.config.director_emergency_enabled,
+                                     emergency_margin=self.config.director_emergency_margin)
+            self._model_health = dict(self.director.healthy)
+            if self._prepared_config is not None and not self.config.monitor:
+                self.director.set_auto(False)
+            if self.config.mock_scores is not None and set(self.config.mock_scores) - set(self.director.match_ids):
+                raise ValueError("Mock score configured for an unregistered match")
+            if self.config.monitor and self.bridge is None:
+                # Default startup never imports or authenticates the Modal SDK.
+                if self.config.replay_transport == "websocket":
+                    from touchline.ml_inference.streaming.ws_client import ReplayWebSocketClient
+                    self.bridge = ReplayWebSocketClient.from_env()
+                else:
+                    from touchline.ml_inference.streaming.client import ReplayClient
+                    self.bridge = ReplayClient()
+            return self
+        except BaseException:
+            # Initialization has no running viewer/director lifecycle yet.
+            # Retire native access in order even if the initial resolve was cancelled.
+            self._closing = True
+            try:
+                await self.monitoring.close_sources()
+            finally:
+                self._closed = True
+                self.state = "stopped"
+            raise
 
     @property
     def auto_starting(self):
@@ -551,6 +569,7 @@ class ReplaySession:
                 logger.warning("Inference submission ended during shutdown (%s)", type(exc).__name__)
             self._start_inflight = None
         await self._stop_worker()
+        await self.monitoring.close_sources()
         self.playing = False
         self._set_state("stopped")
         self.metrics["shutdown_total_seconds"] = time.perf_counter() - closing_started

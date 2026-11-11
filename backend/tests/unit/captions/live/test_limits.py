@@ -38,7 +38,7 @@ def test_backend_adapter_and_child_defaults_share_authorized_eight_hour_caps(mon
 def test_every_entry_point_rejects_excessive_or_nonfinite_caption_allowances(monkeypatch, layer, seconds, cost):
     with pytest.raises((ValueError, TypeError)):
         if layer == 'session':
-            ReplaySession(SourceRegistry.from_env({}), caption_max_audio_seconds=seconds, caption_max_cost_usd=cost)
+            ReplaySession(SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'}), caption_max_audio_seconds=seconds, caption_max_cost_usd=cost)
         elif layer == 'adapter':
             RealtimeCaptionWorker(lambda event: None, max_audio_seconds=seconds, max_cost_usd=cost)
         elif layer == 'engine':
@@ -53,7 +53,7 @@ def test_every_entry_point_rejects_excessive_or_nonfinite_caption_allowances(mon
 def test_eight_hour_deadline_never_renews_across_off_switch_seek_disconnect_and_on():
     async def scenario():
         clock, worker = Clock(), CaptionWorker()
-        session = await ReplaySession(SourceRegistry.from_env({'MATCHPULSE_MATCH_COUNT': '2'}),
+        session = await ReplaySession(SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MATCH_COUNT': '2'}),
             config=SessionConfig(), bridge=FakeBridge(), caption_worker=worker,
             now=clock, monotonic=clock, session_id='session').initialize()
         session.connect('owner')
@@ -90,7 +90,7 @@ def test_eight_hour_deadline_never_renews_across_off_switch_seek_disconnect_and_
 def test_smaller_cost_ceiling_shortens_real_session_deadline_even_with_eight_hour_time_cap():
     async def scenario():
         clock, worker = Clock(), CaptionWorker()
-        session = await ReplaySession(SourceRegistry.from_env({'MATCHPULSE_MATCH_COUNT': '1'}),
+        session = await ReplaySession(SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MATCH_COUNT': '1'}),
             config=SessionConfig(), bridge=FakeBridge(), caption_worker=worker,
             caption_max_audio_seconds=28800, caption_max_cost_usd=.01,
             now=clock, monotonic=clock, session_id='session').initialize()

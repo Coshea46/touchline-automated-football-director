@@ -40,6 +40,22 @@ and accessibility rules remain in `app/`; preserve this order when changing styl
 
 The seven player elements remain mounted when switching matches. Preserve their identities, playback acknowledgements and audio ownership when changing this area.
 
+Private playback is the default: the seven initial cards have no media URLs until
+the backend registers signed sources. `REACT_APP_SOURCE_ACCESS=public` explicitly
+enables the older public demo fallback for authorized local fixtures; the test
+setup opts into that mode, while dedicated tests exercise the private default.
+Permanent AWS credentials and signing remain on the backend.
+
+Signed registrations include stable source identity and `url_expires_at` in Unix
+seconds. A rotated signature does not reload a healthy player or reset captions.
+Each player retains its active URL until shortly before expiry, then restores its
+source position and playback intent on the same element using the latest signed
+URL. Errors also recover with the newest authorization. The backend must publish
+fresh registrations before current authorizations expire; the browser does not
+sign URLs. Verified migrated fixture metadata requires the backend's
+`fixture_verified` attestation, matching source identity and unchanged canonical
+fixture fields and score intervals.
+
 To build the optional frontend container from the repository root:
 
 ```powershell

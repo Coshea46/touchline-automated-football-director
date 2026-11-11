@@ -7,6 +7,7 @@ from pathlib import Path
 from touchline.paths import PROJECT_ROOT
 
 PROVIDER_KEYS = {"ELEVENLABS_API_KEY", "FOOTBALL_DATA_API_KEY", "GUARDIAN_API_KEY"}
+CONFIGURATION_KEYS = PROVIDER_KEYS | {"S3_BUCKET_NAME"}
 
 
 def load_local_environment(path=None, env=None):
@@ -27,7 +28,7 @@ def load_local_environment(path=None, env=None):
         name = name.strip()
         if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
             raise ValueError(f"Invalid local configuration at line {line_number}")
-        if name not in PROVIDER_KEYS and not name.startswith(("MATCHPULSE_", "AWS_", "MODAL_")):
+        if name not in CONFIGURATION_KEYS and not name.startswith(("MATCHPULSE_", "AWS_", "MODAL_")):
             continue
         value = value.strip()
         if value.startswith(("'", '"')):

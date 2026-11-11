@@ -30,7 +30,7 @@ def test_cli_default_budget_remains_ten_dollars_and_duration_forty_minutes(monke
 
 
 def test_persistent_cpu_default_cannot_inherit_paid_monitoring_or_mock_mode():
-    registry, config = local.configuration(args(), {'MATCHPULSE_MONITOR': 'true',
+    registry, config = local.configuration(args(), {'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MONITOR': 'true',
         'MATCHPULSE_ML_MODE': 'features_mock', 'MATCHPULSE_MODEL_VERSION': 'old-model'})
     assert len(registry.sources) == 7
     assert not config.monitor and config.mode == config.model_version == 'disabled'
@@ -42,7 +42,7 @@ def test_persistent_cpu_default_cannot_inherit_paid_monitoring_or_mock_mode():
 def test_explicit_real_launch_uses_a_finite_model_allowance_and_preserves_source_bindings(model, version, budget):
     options = args()
     options.allow_cloud, options.model, options.budget = True, model, budget
-    registry, config = local.configuration(options, {'MATCHPULSE_MATCH_COUNT': '2',
+    registry, config = local.configuration(options, {'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MATCH_COUNT': '2',
         'MATCHPULSE_OFFSETS_JSON': '{"cam-1":120,"cam-2":260.125}', 'MATCHPULSE_DIRECTOR_MODE': 'relaxed'})
     assert config.monitor and config.mode == 'real'
     assert config.model_version == config.checkpoint == version
@@ -57,14 +57,14 @@ def test_invalid_local_bounds_fail_before_server_or_cloud_creation(field, value)
     options = args()
     setattr(options, field, value)
     with pytest.raises(ValueError):
-        local.configuration(options, {})
+        local.configuration(options, {'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'})
 
 
 def test_cloud_reservation_must_fit_all_configured_workers():
     options = args()
     options.allow_cloud, options.budget = True, .01
     with pytest.raises(ValueError, match='per-launch budget'):
-        local.configuration(options, {})
+        local.configuration(options, {'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'})
 
 
 def test_private_credentials_are_existing_app_only_and_never_connect_or_read_weights(monkeypatch, tmp_path):
@@ -135,6 +135,6 @@ def test_normal_local_launch_prepares_real_capability_without_starting_paid_moni
 
 
 def test_short_bounded_validation_command_keeps_its_explicit_time_and_budget():
-    _, config = local.configuration(args(allow_cloud=True, seconds=100, budget=.495), {})
+    _, config = local.configuration(args(allow_cloud=True, seconds=100, budget=.495), {'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'})
     assert config.max_duration_seconds == 100 and config.max_estimated_cost_usd == .495
     assert config.mode == 'real' and config.max_restarts == 0

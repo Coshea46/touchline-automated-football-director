@@ -64,7 +64,7 @@ async def send(socket, message):
 async def fixture():
     clock, bridge, captions = Clock(), FakeBridge(), SingleCaptionWorker()
     session = await ReplaySession(
-        SourceRegistry.from_env({'MATCHPULSE_MATCH_COUNT': '2'}), config=configuration(),
+        SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public', 'MATCHPULSE_MATCH_COUNT': '2'}), config=configuration(),
         bridge=bridge, caption_worker=captions, caption_max_audio_seconds=28800,
         caption_max_cost_usd=3.60, now=clock, monotonic=clock, session_id='session').initialize()
     manager = WebSocketManager(session, host='127.0.0.1', port=0)

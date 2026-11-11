@@ -13,7 +13,7 @@ def test_real_socket_mode_settings_are_authoritative_and_do_not_restart_workers(
     async def scenario():
         bridge = FakeBridge()
         config = configuration(director_mode="balanced")
-        session = await ReplaySession(SourceRegistry.from_env({}), config=config, bridge=bridge).initialize()
+        session = await ReplaySession(SourceRegistry.from_env({'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'}), config=config, bridge=bridge).initialize()
         manager = WebSocketManager(session, host="127.0.0.1", port=0)
         await manager.start()
         url = f"ws://127.0.0.1:{manager.server.sockets[0].getsockname()[1]}"

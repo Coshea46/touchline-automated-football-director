@@ -101,7 +101,7 @@ These are **short, bounded tests**, not a claim of multi-hour uptime or frame-pe
 
 ## Run Touchline locally
 
-You'll need **PowerShell**, **Node.js** and **Python 3.12**, plus the existing private Modal inference credentials for real ML monitoring. Run these commands from the repository root.
+You'll need **PowerShell**, **Node.js** and **Python 3.12**, plus the existing private Modal inference credentials for real ML monitoring. Private video playback needs an authenticated local AWS profile; a Modal-hosted backend uses its OIDC identity and the read-only role. Run these commands from the repository root.
 
 ### Install once
 
@@ -146,7 +146,7 @@ Open **http://127.0.0.1:3030/**.
 
 Keep both terminals open. Press `Ctrl+C` to stop them.
 
-For a **provider-free UI check**, launch the backend with `--offline --no-captions`.
+To disable GPU inference and transcription, launch the backend with `--offline --no-captions`. Private video access still uses authenticated S3 requests. The frontend can render its initial placeholders without video credentials.
 
 A finite two-minute seven-match demo is also available:
 
@@ -175,6 +175,10 @@ Keep credentials server-side. Never commit `.env`. Without a key, the relevant f
 Live captions default to **On** with a valid key and active playback. Only the focused match is transcribed. Paid caption usage has its own configured duration and estimated budget limits, independent of Modal GPU monitoring.
 
 ## Project structure
+
+The default recording source is the owner's private S3 bucket. See
+[private S3 setup](docs/private-s3.md) for the role, URL renewal, source verification
+and the bounded CPU-only access check. No permanent AWS credentials go to the browser.
 
 | Area | Responsibility |
 |---|---|

@@ -32,6 +32,10 @@ def main():
             "touchline/api/websocket.py",
             "touchline/replay/captions.py",
             "touchline/replay/monitoring.py",
+            "touchline/config/video_sources.py",
+            "touchline/storage/s3.py",
+            "touchline/tools/storage/verify_sources.py",
+            "touchline/tools/storage/modal_probe.py",
             "touchline/ml_inference/deployment/requirements-worker.txt",
             "touchline/ml_inference/runtime/audio_sampleclock_v3.py",
             "touchline/ml_inference/runtime/matchpulse-0.1.0+autonomous1-py3-none-any.whl",
@@ -73,6 +77,15 @@ catalog = json.loads(METADATA_PATH.read_text(encoding='utf-8'))
 assert len(catalog['matches']) == 7
 for item in catalog['matches']:
     assert metadata_for_source(item['match_id'], item['source_key'])
+from touchline.replay.sources import SourceRegistry
+from touchline.config.video_sources import VIDEO_BUCKET, VIDEO_REGION
+registry = SourceRegistry.from_env({})
+assert registry.bucket == VIDEO_BUCKET
+assert registry.region == VIDEO_REGION
+assert registry.access == 'presigned'
+from touchline.storage import S3Access
+from touchline.tools.storage.verify_sources import verify_sources
+assert callable(verify_sources)
 from touchline.ml_inference.models.release import verify_release_support
 from touchline.ml_inference.features.audio import verify_reference_decoder
 verify_release_support()
@@ -97,7 +110,7 @@ runpy.run_module('touchline.captions.live.worker', run_name='__main__')
             subprocess.run([str(caption_python), "-I", "-B", "-c", caption_check],
                            input="", text=True, check=True, cwd=scratch, env=env, timeout=30)
             print("Isolated caption runtime: ElevenLabs SDK, websockets 13.1 and EOF startup passed.")
-    print("Backend wheel: assets, entry points, match catalog and caption IPC startup passed.")
+    print("Backend wheel: assets, private-source defaults, entry points, match catalog and caption IPC startup passed.")
     return 0
 
 
