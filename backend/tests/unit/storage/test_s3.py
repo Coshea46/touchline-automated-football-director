@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from threading import Lock
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from botocore import UNSIGNED
 from botocore.credentials import Credentials, ReadOnlyCredentials
@@ -30,6 +30,91 @@ def test_real_sdk_presigns_regional_host_without_redirect_or_network():
             assert "/eu-west-2/s3/aws4_request" in scope
     finally:
         access.close()
+
+
+@pytest.mark.parametrize("region,suffix", [("eu-west-2", "amazonaws.com"), ("cn-north-1", "amazonaws.com.cn")])
+def test_real_sdk_signs_dualstack_same_encoded_object_without_network_or_url_rewriting(region, suffix):
+    import boto3
+    def session_factory(**kwargs):
+        return boto3.Session(aws_access_key_id="OFFLINE_TEST_ACCESS",
+                             aws_secret_access_key="OFFLINE_TEST_SECRET", **kwargs)
+    access = S3Access({}, region=region, session_factory=session_factory)
+    key = "nested/football +?#é.mp4"
+    try:
+        signatures = []
+        for dualstack in (False, True):
+            for sign in (access.presign_get, access.presign_head):
+                result = sign(BUCKET, key, 300, dualstack=dualstack)
+                parsed, query = urlsplit(result.url), parse_qs(urlsplit(result.url).query)
+                prefix = "s3.dualstack" if dualstack else "s3"
+                assert parsed.netloc == f"{BUCKET}.{prefix}.{region}.{suffix}"
+                assert parsed.path == "/" + quote(key, safe="/")
+                assert query["X-Amz-Expires"] == ["300"]
+                assert f"/{region}/s3/aws4_request" in query["X-Amz-Credential"][0]
+                assert query["X-Amz-SignedHeaders"] == ["host"]
+                signatures.append(query["X-Amz-Signature"][0])
+        assert len(set(signatures)) == 4  # Endpoint and method both bind signatures.
+        assert len(access._signers) == 2
+    finally:
+        access.close()
+
+
+def test_split_warm_rotates_both_cached_signers_with_same_credential_expiry_and_closes_all_once():
+    clock = Clock()
+    env = {"MODAL_IDENTITY_TOKEN": "PRIVATE_TEST_OIDC_ONE", "AWS_ROLE_ARN": ROLE,
+           "MATCHPULSE_S3_MEDIA_ORIGINS": "split"}
+    sts = FakeSTS([response(clock, lifetime=1200), lambda: response(clock, suffix="two")])
+    access, _, sessions, _, _ = oidc_access(clock, sts, env)
+    access.warm()
+    head, normal, alternate = sessions[0].clients
+    assert len(sts.calls) == 1 and not normal.calls and not alternate.calls
+    assert ".dualstack." not in normal.kwargs["endpoint_url"]
+    assert alternate.kwargs["endpoint_url"] == "https://s3.dualstack.eu-west-2.amazonaws.com"
+    assert alternate.kwargs["config"].use_dualstack_endpoint is True
+    first = [access.presign_get(BUCKET, "match-1.mp4", dualstack=mode) for mode in (False, True)]
+    assert all(value.actual_ttl_seconds == 1170 and value.authorization_expires_at == clock() + 1200 for value in first)
+    clock.value += 600
+    env["MODAL_IDENTITY_TOKEN"] = "PRIVATE_TEST_ROTATED_OIDC"
+    second = [access.presign_head(BUCKET, "match-1.mp4", dualstack=mode) for mode in (False, True)]
+    assert all(value.actual_ttl_seconds == 3570 and value.authorization_expires_at == clock() + 3600 for value in second)
+    assert len(sts.calls) == 2 and len(sessions[0].clients) == 5
+    assert normal.close_calls == alternate.close_calls == 1 and not head.closed
+    assert all(client.kwargs["aws_access_key_id"] == "TEST_ACCESS_two" for client in sessions[0].clients[-2:])
+    access.retain()
+    assert access.close() is False and not head.closed
+    access.release()
+    assert access.closed and all(client.close_calls == 1 for client in sessions[0].clients)
+    assert access.close() is True
+
+
+def test_parallel_both_origins_take_refreshable_snapshot_outside_owner_lock_and_bound_client_count():
+    owner = []
+    class CheckedCredentials(Credentials):
+        def get_frozen_credentials(self):
+            assert not owner[0]._lock._is_owned()
+            return super().get_frozen_credentials()
+    session = FakeSession(CheckedCredentials("OFFLINE_ACCESS", "OFFLINE_SECRET"))
+    access = S3Access({"MATCHPULSE_S3_MEDIA_ORIGINS": "split"}, session_factory=lambda **kwargs: session)
+    owner.append(access)
+    access.warm()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda index: access.presign_get(BUCKET, "match-1.mp4", dualstack=bool(index % 2)), range(16)))
+    assert len(results) == 16 and len(session.clients) == 3 and len(access._signers) == 2
+    access.close()
+    assert all(client.close_calls == 1 for client in session.clients)
+
+
+@pytest.mark.parametrize("mode", ["", "dualstack", "SPLIT", True])
+def test_invalid_origin_mode_fails_without_resolving_credentials(mode):
+    with pytest.raises(ValueError, match="^invalid_s3_media_origins$"):
+        S3Access({"MATCHPULSE_S3_MEDIA_ORIGINS": mode}, session_factory=lambda **_: pytest.fail("AWS must stay lazy"))
+
+
+@pytest.mark.parametrize("mode", [None, "true", 1])
+def test_dualstack_signing_option_requires_explicit_bool(mode):
+    access = S3Access({}, session_factory=lambda **_: pytest.fail("AWS must stay lazy"))
+    with pytest.raises(ValueError, match="^invalid_s3_dualstack_mode$"):
+        access.presign_get(BUCKET, "match-1.mp4", dualstack=mode)
 
 
 def test_oidc_initialization_is_lazy_and_never_uses_the_local_credential_chain():

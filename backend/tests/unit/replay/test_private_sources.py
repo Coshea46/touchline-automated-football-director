@@ -1,7 +1,7 @@
 """Private-bucket source authorization and fixture binding without AWS access."""
 
 import copy
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import pytest
 
@@ -33,11 +33,12 @@ class FakeAccess:
     def _sign(self, bucket, key, ttl, method):
         self.serial += 1
         self.signatures.append((bucket, key, method))
-        url = f"https://{bucket}.s3.{VIDEO_REGION}.amazonaws.com/{quote(key)}?PRIVATE_{method}={self.serial}"
+        endpoint = "s3.dualstack" if method == "GET_DUAL" else "s3"
+        url = f"https://{bucket}.{endpoint}.{VIDEO_REGION}.amazonaws.com/{quote(key)}?PRIVATE_{method}={self.serial}"
         return PresignedObject(url, self.clock + min(ttl, 600), self.clock + 630, min(ttl, 600))
 
-    def presign_get(self, bucket, key, ttl):
-        return self._sign(bucket, key, ttl, "GET")
+    def presign_get(self, bucket, key, ttl, *, dualstack=False):
+        return self._sign(bucket, key, ttl, "GET_DUAL" if dualstack else "GET")
 
     def presign_head(self, bucket, key, ttl):
         return self._sign(bucket, key, ttl, "HEAD")
@@ -97,6 +98,86 @@ def test_rotated_urls_keep_identity_offsets_and_metadata_but_republish_expiry():
     assert first[0].offset_seconds == second[0].offset_seconds
     assert second[0].expires_at == 2141
     assert not registry.needs_refresh()
+
+
+def test_split_browser_origins_balance_seven_sources_and_preserve_canonical_identity_and_worker_urls():
+    registry, access = private_registry()
+    canonical = registry.resolve()
+    registry.media_origins = "split"
+    split = registry.resolve()
+    assert len(access.signatures) == 14 + 17
+    assert [".dualstack." in urlsplit(source.playback_url).hostname for source in split] == [False, True, False, True, False, True, False]
+    assert len({urlsplit(source.playback_url).hostname for source in split}) == 2
+    for before, after in zip(canonical, split):
+        assert before.identity == after.identity and before.metadata == after.metadata
+        assert ".dualstack." not in urlsplit(after.source_url).hostname
+        assert ".dualstack." not in urlsplit(after.head_url).hostname
+        assert after.worker_spec()["source_url"] == after.source_url
+        assert after.public_spec()["url"] == after.playback_url
+    access.clock += 541
+    rotated = registry.resolve()
+    for before, after in zip(split, rotated):
+        assert before.playback_url != after.playback_url
+        assert urlsplit(before.playback_url).hostname == urlsplit(after.playback_url).hostname
+        assert before.identity == after.identity and before.metadata == after.metadata
+
+
+def test_split_minimum_expiry_includes_alternate_get_and_failed_refresh_is_atomic(monkeypatch):
+    registry, access = private_registry()
+    registry.media_origins = "split"
+    original = access.presign_get
+    def sign(bucket, key, ttl, *, dualstack=False):
+        signed = original(bucket, key, ttl, dualstack=dualstack)
+        return PresignedObject(signed.url, access.clock + 90, access.clock + 630, 90) if dualstack else signed
+    monkeypatch.setattr(access, "presign_get", sign)
+    before = registry.resolve()
+    assert [source.expires_at for source in before] == [1600, 1090, 1600, 1090, 1600, 1090, 1600]
+    pins = dict(registry._identity_pins)
+    def fail(bucket, key, ttl, *, dualstack=False):
+        if dualstack and key == "match-4.mp4":
+            raise RuntimeError("PRIVATE_SIGNATURE_MUST_NOT_ESCAPE")
+        return sign(bucket, key, ttl, dualstack=dualstack)
+    monkeypatch.setattr(access, "presign_get", fail)
+    with pytest.raises(StorageAuthorizationError, match="^source_access_unavailable$"):
+        registry.resolve()
+    assert registry._resolved is before and registry._identity_pins == pins
+
+
+@pytest.mark.parametrize("alter", [
+    lambda url: url.replace(".s3.dualstack.", ".s3."),
+    lambda url: url.replace(".amazonaws.com/", ".amazonaws.com.evil.invalid/"),
+    lambda url: url.replace("/match-2.mp4", "/different.mp4"),
+    lambda url: url.replace(".amazonaws.com/", ".amazonaws.com:443/"),
+])
+def test_split_rejects_any_alternate_signed_locator_that_is_not_exact_same_sdk_bucket_key(monkeypatch, alter):
+    registry, access = private_registry()
+    registry.media_origins = "split"
+    original = access.presign_get
+    def sign(bucket, key, ttl, *, dualstack=False):
+        signed = original(bucket, key, ttl, dualstack=dualstack)
+        return PresignedObject(alter(signed.url), signed.expires_at, signed.authorization_expires_at,
+                               signed.actual_ttl_seconds) if dualstack else signed
+    monkeypatch.setattr(access, "presign_get", sign)
+    with pytest.raises(StorageAuthorizationError, match="^source_playback_locator_mismatch$"):
+        registry.resolve()
+    assert registry._resolved == () and registry._identity_pins == {}
+
+
+def test_split_requires_expiry_aware_injected_access_and_never_silently_falls_back(monkeypatch):
+    registry, access = private_registry()
+    with pytest.raises(ValueError, match="split_media_requires_expiry_aware_access"):
+        SourceRegistry(registry.sources, s3_client=access, access="presigned", media_origins="split")
+    registry.media_origins = "split"
+    monkeypatch.setattr(access, "presign_get", lambda bucket, key, ttl: access._sign(bucket, key, ttl, "GET"))
+    with pytest.raises(StorageAuthorizationError, match="^source_access_unavailable$"):
+        registry.resolve()
+    assert registry._resolved == ()
+
+
+@pytest.mark.parametrize("mode", ["", "dualstack", "SPLIT", True])
+def test_media_origin_configuration_is_explicit_and_invalid_values_fail_before_access(mode):
+    with pytest.raises(ValueError, match="^invalid_s3_media_origins$"):
+        SourceRegistry.from_env({"MATCHPULSE_S3_MEDIA_ORIGINS": mode})
 
 
 def test_destination_size_mismatch_fails_closed_without_partial_registration(monkeypatch):

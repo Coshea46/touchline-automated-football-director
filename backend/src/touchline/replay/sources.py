@@ -99,7 +99,7 @@ class SourceRegistry:
 
     def __init__(self, sources, *, bucket=LEGACY_PUBLIC_BUCKET, region=VIDEO_REGION,
                  access="public", url_ttl_seconds=3600, s3_client=None, s3_access=None,
-                 aws_env=None, now=time.time, owns_access=True):
+                 aws_env=None, now=time.time, owns_access=True, media_origins="single"):
         self.sources = tuple(sources)
         if not 1 <= len(self.sources) <= 7:
             raise ValueError("Configure between one and seven matches")
@@ -111,10 +111,15 @@ class SourceRegistry:
             raise ValueError("Invalid AWS region")
         if access not in ("public", "presigned"):
             raise ValueError("MATCHPULSE_SOURCE_ACCESS must be public or presigned")
+        if media_origins not in ("single", "split"):
+            raise ValueError("invalid_s3_media_origins")
+        if media_origins == "split" and s3_client is not None:
+            raise ValueError("split_media_requires_expiry_aware_access")
         if type(owns_access) is not bool or (not owns_access and s3_access is None):
             raise ValueError("Borrowed source access requires an explicit owner")
         number(url_ttl_seconds, "url_ttl_seconds", minimum=120, maximum=21600)
         self.bucket, self.region, self.access = bucket, region, access
+        self.media_origins = media_origins
         self.url_ttl_seconds, self._s3, self.now = int(url_ttl_seconds), s3_client, now
         self._access = s3_access
         self._owns_access, self._access_reference = owns_access, False
@@ -169,7 +174,8 @@ class SourceRegistry:
                    region=env.get("AWS_DEFAULT_REGION") or env.get("AWS_REGION") or VIDEO_REGION,
                    access=env.get("MATCHPULSE_SOURCE_ACCESS") or VIDEO_SOURCE_ACCESS,
                    url_ttl_seconds=int(env.get("MATCHPULSE_SOURCE_URL_TTL", "3600")), aws_env=env,
-                   s3_access=s3_access, owns_access=owns_access)
+                   s3_access=s3_access, owns_access=owns_access,
+                   media_origins=env.get("MATCHPULSE_S3_MEDIA_ORIGINS", "single"))
 
     def resolve(self):
         started = time.perf_counter()
@@ -225,6 +231,7 @@ class SourceRegistry:
         heads = self._private_heads(metrics)
         resolved = []
         pins = dict(self._identity_pins)
+        private_index = 0
         for source in self.sources:
             # Internal IDs alone never identify a custom source as one of the
             # historical demo fixtures. Match the actual bucket/object binding.
@@ -242,6 +249,19 @@ class SourceRegistry:
                             probe = self._access.presign_head(self.bucket, source.key, self.url_ttl_seconds)
                             url, head_url = get.url, probe.url
                             expires_at = min(get.expires_at, probe.expires_at)
+                            playback_url = url
+                            if self.media_origins == "split" and private_index % 2:
+                                alternate = self._access.presign_get(self.bucket, source.key,
+                                    self.url_ttl_seconds, dualstack=True)
+                                parsed = urlsplit(media_url(alternate.url))
+                                suffix = "amazonaws.com.cn" if self.region.startswith("cn-") else "amazonaws.com"
+                                expected_host = f"{self.bucket}.s3.dualstack.{self.region}.{suffix}"
+                                if (parsed.netloc != expected_host
+                                        or parsed.path != "/" + quote(source.key, safe="/")
+                                        or not parsed.query):
+                                    raise StorageAuthorizationError("source_playback_locator_mismatch")
+                                playback_url = alternate.url
+                                expires_at = min(expires_at, alternate.expires_at)
                         else:
                             # Explicit injected clients are deterministic adapters;
                             # production uses the expiry-aware access layer.
@@ -249,6 +269,7 @@ class SourceRegistry:
                             url = self._s3.generate_presigned_url("get_object", Params=params, ExpiresIn=self.url_ttl_seconds)
                             head_url = self._s3.generate_presigned_url("head_object", Params=params, ExpiresIn=self.url_ttl_seconds)
                             expires_at = self.now() + self.url_ttl_seconds
+                            playback_url = url
                     finally:
                         metrics["presign_seconds"] += time.perf_counter() - started
                     identity = source_identity(source.key, head.get("ETag"), head.get("ContentLength"), url)
@@ -268,8 +289,9 @@ class SourceRegistry:
                     # Credential, SDK and URL errors must not disclose signed queries.
                     raise StorageAuthorizationError("source_access_unavailable") from None
                 label = metadata["display_name"] if metadata else source.label
-                resolved.append(replace(source, source_url=url, playback_url=url, head_url=head_url,
+                resolved.append(replace(source, source_url=url, playback_url=playback_url, head_url=head_url,
                                         expires_at=expires_at, identity=identity, metadata=metadata, label=label))
+                private_index += 1
                 continue
             else:
                 url = f"https://{self.bucket}.s3.{self.region}.amazonaws.com/{quote(source.key, safe='/')}"

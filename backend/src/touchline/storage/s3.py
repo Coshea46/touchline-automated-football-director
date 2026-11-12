@@ -85,6 +85,9 @@ class S3Access:
     def __init__(self, env=None, *, region=None, now=time.time,
                  session_factory=None, sts_client_factory=None, token_provider=None):
         self._env = os.environ if env is None else env
+        self.media_origins = self._env.get("MATCHPULSE_S3_MEDIA_ORIGINS", "single")
+        if self.media_origins not in ("single", "split"):
+            raise ValueError("invalid_s3_media_origins")
         self.region = region or self._env.get("AWS_REGION") or self._env.get("AWS_DEFAULT_REGION") or "eu-west-2"
         self._now = now
         self._session_factory = session_factory or _boto_session
@@ -93,7 +96,7 @@ class S3Access:
         self._explicit_token_provider = token_provider is not None
         self._lock = RLock()
         self._session = self._client = self._sts = None
-        self._signer = self._signer_generation = None
+        self._signers, self._signer_generation = {}, None
         self._references = 0
         self._closing = self._closed = False
         self._close_confirmed = False
@@ -131,12 +134,13 @@ class S3Access:
             return self._closed
 
     @staticmethod
-    def _config(*, unsigned=False):
+    def _config(*, unsigned=False, dualstack=False):
         from botocore import UNSIGNED
         from botocore.config import Config
 
         return Config(signature_version=UNSIGNED if unsigned else "s3v4",
                       s3={"addressing_style": "virtual"},
+                      use_dualstack_endpoint=dualstack,
                       connect_timeout=3, read_timeout=5,
                       retries={"max_attempts": 2})
 
@@ -232,9 +236,10 @@ class S3Access:
         except Exception:
             raise StorageAuthorizationError("aws_credentials_unavailable") from None
 
-    def _s3_endpoint(self):
+    def _s3_endpoint(self, *, dualstack=False):
         suffix = "amazonaws.com.cn" if self.region.startswith("cn-") else "amazonaws.com"
-        return f"https://s3.{self.region}.{suffix}"
+        kind = "s3.dualstack" if dualstack else "s3"
+        return f"https://{kind}.{self.region}.{suffix}"
 
     def authorization_expiry(self):
         """Resolve/refresh credentials and return their actual expiration, if any."""
@@ -243,20 +248,25 @@ class S3Access:
 
     get_authorization_expiry = authorization_expiry
 
-    def _frozen_signer(self, frozen, expiry):
+    def _frozen_signer(self, frozen, expiry, *, dualstack=False):
         """Called under owner lock only, after the refreshable snapshot is read."""
         generation = (frozen.access_key, frozen.secret_key, frozen.token, expiry)
-        if self._signer is None or self._signer_generation != generation:
+        if dualstack not in self._signers or self._signer_generation != generation:
             signer = self._get_session().client(
-                "s3", region_name=self.region, endpoint_url=self._s3_endpoint(), config=self._config(),
+                "s3", region_name=self.region, endpoint_url=self._s3_endpoint(dualstack=dualstack),
+                config=self._config(dualstack=dualstack),
                 aws_access_key_id=frozen.access_key, aws_secret_access_key=frozen.secret_key,
                 aws_session_token=frozen.token)
-            previous = self._signer
-            self._signer, self._signer_generation = signer, generation
-            if previous is not None and previous is not signer:
+            previous = tuple(self._signers.values()) if self._signer_generation != generation else ()
+            if previous:
+                self._signers = {}
+            self._signers[dualstack], self._signer_generation = signer, generation
+            for old in previous:
+                if old is signer:
+                    continue
                 with suppress(Exception):
-                    previous.close()
-        return self._signer
+                    old.close()
+        return self._signers[dualstack]
 
     def warm(self):
         """Resolve credentials and build clients without reading/signing an object."""
@@ -267,9 +277,13 @@ class S3Access:
             frozen, expiry = self._snapshot()
             with self._lock:
                 self._frozen_signer(frozen, expiry)
+                if self.media_origins == "split":
+                    self._frozen_signer(frozen, expiry, dualstack=True)
             return expiry
 
-    def presign_object(self, bucket, key, ttl_seconds=3600, *, method="get_object"):
+    def presign_object(self, bucket, key, ttl_seconds=3600, *, method="get_object", dualstack=False):
+        if type(dualstack) is not bool:
+            raise ValueError("invalid_s3_dualstack_mode")
         if method not in ("get_object", "head_object"):
             raise ValueError("Only S3 object read operations can be signed")
         if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 604800:
@@ -284,7 +298,7 @@ class S3Access:
                 with self._lock:
                     # Fixed-generation signer reuse is safe only while this
                     # lock covers signing and replacement/client construction.
-                    signing_client = self._frozen_signer(frozen, expiry)
+                    signing_client = self._frozen_signer(frozen, expiry, dualstack=dualstack)
                     now = self._now()
                     lifetime = ttl_seconds if expiry is None else min(
                         ttl_seconds, math.floor(expiry - now - self.EXPIRY_MARGIN_SECONDS))
@@ -298,22 +312,23 @@ class S3Access:
             except Exception:
                 raise StorageAuthorizationError("s3_presign_failed") from None
 
-    def presign_get(self, bucket, key, ttl_seconds=3600):
-        return self.presign_object(bucket, key, ttl_seconds, method="get_object")
+    def presign_get(self, bucket, key, ttl_seconds=3600, *, dualstack=False):
+        return self.presign_object(bucket, key, ttl_seconds, method="get_object", dualstack=dualstack)
 
-    def presign_head(self, bucket, key, ttl_seconds=3600):
-        return self.presign_object(bucket, key, ttl_seconds, method="head_object")
+    def presign_head(self, bucket, key, ttl_seconds=3600, *, dualstack=False):
+        return self.presign_object(bucket, key, ttl_seconds, method="head_object", dualstack=dualstack)
 
     def _close_clients(self):
         failed, seen = False, set()
-        for client in (self._client, self._sts, self._signer):
+        for client in (self._client, self._sts, *self._signers.values()):
             if client is not None and id(client) not in seen:
                 seen.add(id(client))
                 try:
                     client.close()
                 except Exception:
                     failed = True
-        self._client = self._sts = self._session = self._signer = self._signer_generation = None
+        self._client = self._sts = self._session = self._signer_generation = None
+        self._signers = {}
         self._closed, self._close_confirmed = True, not failed
         if failed:
             raise StorageAuthorizationError("aws_client_close_failed") from None
