@@ -7,6 +7,20 @@ from touchline.ml_inference.streaming.client import OwnedReplayHandles, ReplayCl
 from tests.support.ml_inference.client import session, control, sdk_fixture, multi_session
 
 
+def test_full_four_worker_window_covers_l4_and_captions_and_rejects_old_underfunded_allowance():
+    from touchline.ml_inference.streaming.contract import MAX_WORKER_RATE, T4_WORKER_RATE, validate_session
+    # Approved maximum resources: L4/T4, eight CPU cores, eight GiB per worker.
+    l4_compute = (120 + 330) * 4 * (.000222 + 8 * .0000131 + 8 * .00000222)
+    assert l4_compute == pytest.approx(.620208)
+    assert MAX_WORKER_RATE >= T4_WORKER_RATE
+    assert (120 + 330) * 4 * MAX_WORKER_RATE >= l4_compute
+    assert (120 + 330) * 4 * MAX_WORKER_RATE + .02 <= .70
+    spec = multi_session(max_duration_seconds=120, gpu_workers=4, max_estimated_cost_usd=.70)
+    assert validate_session(spec) is spec
+    with pytest.raises(ValueError, match="estimated compute allowance"):
+        validate_session({**spec, "max_estimated_cost_usd": .60})
+
+
 def test_construction_never_imports_or_authenticates_the_sdk(monkeypatch):
     def forbidden(_):
         raise AssertionError("No SDK import was authorized by construction")

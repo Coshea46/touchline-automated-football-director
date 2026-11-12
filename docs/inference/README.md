@@ -35,8 +35,10 @@ replay ownership, playback permits and director policy remain in
 
 ## Runtime contract
 
-- Seven distinct source readers/caches are distributed over four T4 workers by
-  default (2+2+2+1). `MATCHPULSE_GPU_WORKERS` can select one through four workers.
+- Seven distinct source readers/caches are distributed over four GPU workers
+  by default (2+2+2+1), with T4/L4 capacity fallback in the deployment.
+  `MATCHPULSE_GPU_WORKERS` can select one through four workers. L4 verification
+  remains pending; GPU choice preserves the frozen model and contracts below.
 - Workers read encoded source media directly. Observations are sampled at 15 FPS;
   complete five-second windows contain 75 rows and advance every two seconds.
   Overlapping windows reuse observations rather than repeating YOLO detection.
@@ -143,6 +145,15 @@ Run provider-free tests from the repository root:
 
 The [package verifier](../../scripts/README.md) checks installed-wheel assets,
 entry points and caption subprocess startup without cloud calls.
+
+On 12 November 2026, a bounded T4 operator check produced complete real-model
+cohorts across all seven sources at observation ends of 5 and 7 seconds, with
+21.415-second startup and confirmed owned GPU/source cleanup. This is T4 evidence;
+the configured L4 capacity fallback remains unverified. Public browser Auto
+verification is also pending after T4 queueing exceeded the 90-second worker
+connection timeout. Manual seven-source browser playback and focused Scribe
+delivery passed separately. Current public reservations are $0.70 for up to
+120 seconds; see [hosted admission and verification](../modal-backend.md).
 
 Historical measurements are preserved separately:
 

@@ -8,10 +8,15 @@ HEAD requests, one-byte HTTP 206 GET ranges and CORS for both
 A separate public browser check decoded all seven recordings, observed advancing
 native playback, preserved the seven video nodes through manual switches and
 resumed a nonzero replay after same-tab reload. The maximum switch clock deviation
-was 0.002 seconds. A separate bounded operator check verified complete real-model
+was 0.002 seconds. A separate bounded T4 operator check verified complete real-model
 inference cohorts across all seven sources. Full-file checksums and the complete
 public browser Auto path remain unverified. See
 [hosted verification status](modal-backend.md#frontend-connection-and-verification).
+
+The T4/L4 compute capacity fallback retains the same private source bindings and
+signed-read protocol. It does not change the recordings, frozen model or raw
+feature/clock contracts. L4 verification is pending; the T4 result above does not
+establish L4 readiness or public Auto startup latency.
 
 ## Configured resources
 

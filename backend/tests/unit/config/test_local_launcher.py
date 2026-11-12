@@ -135,6 +135,6 @@ def test_normal_local_launch_prepares_real_capability_without_starting_paid_moni
 
 
 def test_short_bounded_validation_command_keeps_its_explicit_time_and_budget():
-    _, config = local.configuration(args(allow_cloud=True, seconds=100, budget=.495), {'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'})
-    assert config.max_duration_seconds == 100 and config.max_estimated_cost_usd == .495
+    _, config = local.configuration(args(allow_cloud=True, seconds=100, budget=.60), {'S3_BUCKET_NAME': 'match-switcher-poc-videos', 'MATCHPULSE_SOURCE_ACCESS': 'public'})
+    assert config.max_duration_seconds == 100 and config.max_estimated_cost_usd == .60
     assert config.mode == 'real' and config.max_restarts == 0

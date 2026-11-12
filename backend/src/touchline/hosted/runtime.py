@@ -21,7 +21,7 @@ async def create_session(env, session_id, activation_guard):
     registry.sources = tuple(replace(source, offset_seconds=0) for source in registry.sources)
     prepared = SessionConfig(monitor=True, mode="real", model_version=NEW_MODEL_VERSION,
         checkpoint=NEW_MODEL_VERSION, max_duration_seconds=120,
-        max_estimated_cost_usd=0.60, max_restarts=0,
+        max_estimated_cost_usd=0.70, max_restarts=0,
         gpu_workers=math.ceil(len(registry.sources) / MATCHES_PER_GPU))
     session = ReplaySession(registry, config=SessionConfig(max_restarts=0),
         session_id=session_id, prepared_config=prepared, activation_guard=activation_guard,

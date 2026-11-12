@@ -10,10 +10,12 @@ from tests.support.ml_inference.worker import load_app
 from tests.support.ml_inference.client import session, MemoryStore
 
 
-def test_replay_worker_has_one_gpu_pool_zero_idle_and_no_retry(monkeypatch):
+def test_replay_worker_prefers_t4_with_l4_fallback_in_one_bounded_pool(monkeypatch):
     _, registrations, volumes = load_app(monkeypatch)
     limits = registrations["ReplayWorker"]
-    assert limits["gpu"] == "T4" and limits["max_containers"] == 4
+    assert limits["gpu"] == ["T4", "L4"] and limits["max_containers"] == 4
+    assert registrations["FeatureWorker"]["gpu"] == "T4"
+    assert "region" not in limits and "routing_region" not in limits
     assert limits["min_containers"] == 0 and limits["buffer_containers"] == 0
     assert limits["scaledown_window"] == 5 and limits["retries"] == 0
     assert 0 < limits["timeout"] <= 4000 and 0 < limits["startup_timeout"] <= 300

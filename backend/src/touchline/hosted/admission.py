@@ -28,7 +28,9 @@ class AdmissionDenied(RuntimeError):
 
 class AdmissionPolicy:
     AI_SECONDS = 120
-    AI_RESERVATION_USD = .60
+    # Four worst-case L4 workers including cold startup, plus focused captions.
+    # Old .60 rows remain unchanged and count at their actual stored amounts.
+    AI_RESERVATION_USD = .70
     # Retain uncertain leases beyond the GPU's duration + startup/cleanup bounds.
     LEASE_SECONDS = 600
 

@@ -15,7 +15,12 @@ MAX_SESSION_BUDGET_USD = 20
 # Existing deployed workers accept this per-input ceiling. Larger service
 # allowances are partitioned without changing the deployed inference runtime.
 MAX_WORKER_BUDGET_USD = 10
-MAX_WORKER_RATE = .000164 + 8 * .0000131 + 8 * .00000222
+# Cover either approved GPU with the maximum eight CPU cores/eight GiB.
+# Shared streaming/demo budget helpers now conservatively overestimate T4;
+# historical persisted reservations are retained at their original amounts.
+T4_WORKER_RATE = .000164 + 8 * .0000131 + 8 * .00000222
+L4_WORKER_RATE = .000222 + 8 * .0000131 + 8 * .00000222
+MAX_WORKER_RATE = max(T4_WORKER_RATE, L4_WORKER_RATE)
 _ID = re.compile(r'^[A-Za-z0-9_.:-]{1,120}$')
 
 

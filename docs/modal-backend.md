@@ -83,18 +83,29 @@ At container startup the factory reloads the state volume, then constructs
 The policy must commit a paid reservation before permitting provider work; a
 filesystem write alone is insufficient for a volume-backed cold restart. Its
 limits, cooldowns and conservative handling of uncertain cleanup apply across
-visitors. The default policy admits at most two $0.60 AI reservations from a $1.20
-UTC-day allowance and a $3.00 total allowance, with one admitted AI session at a time.
-Reservations are non-refundable. The total allowance does not reset at midnight
-or on a cold start. These are application estimates and admission limits, not a
-provider-enforced billing cap.
+visitors. New public AI grants reserve $0.70 for up to 120 seconds. The deployed
+$2.80 UTC-day allowance permits at most four new grants on a fresh day, subject
+to the unchanged $3.00 total allowance, one admitted AI session at a time and
+one grant per IP per hour. The generic `AdmissionPolicy` code fallback remains
+$1.20 per UTC day (at most one new $0.70 grant) when no explicit daily setting is
+supplied. Reservations are non-refundable;
+changing the configured allowance does not refund reservations or reset cooldowns.
+The total allowance does not reset at midnight or on a cold start. These are
+application estimates and admission limits, not a provider-enforced billing cap.
 
-Include these explicit nonsecret settings in the backend configuration:
+The deployed backend uses these explicit nonsecret settings:
 
 ```dotenv
-TOUCHLINE_AI_DAILY_BUDGET_USD=1.20
+TOUCHLINE_AI_DAILY_BUDGET_USD=2.80
 TOUCHLINE_AI_TOTAL_BUDGET_USD=3.00
 ```
+
+The two earlier $0.60 reservations remain charged at their original amounts.
+Their $1.20 usage leaves room for two further $0.70 grants within the 12 November
+UTC-day allowance and the unchanged total limit. The pending cloud-browser
+verification will reserve $0.70 even if startup fails. After that reservation,
+$1.10 of the global allowance can support one further $0.70 visitor grant,
+subject to the daily/IP limits and confirmed cleanup. No L4 success is claimed.
 
 An uncleared paid lease blocks new starts even after its timestamp expires or
 the container restarts. Confirmed cleanup releases the active slot; uncertain
@@ -129,6 +140,12 @@ WebSocket dependencies remain separate. The existing GPU deployment,
 `touchline.ml_inference.deployment.modal_app`, its model volume and worker
 contracts are unchanged.
 
+The inference deployment allows T4/L4 capacity fallback while retaining the
+frozen selected model, seven source readers, raw `(75,215)` feature windows and
+the existing playback-permit/clock contract. GPU availability remains a provider
+constraint. L4 verification is pending; the earlier successful operator result
+below was measured on T4.
+
 Recordings stay in private S3 and are read directly by authorized consumers.
 The CPU image includes packaged source metadata and frozen inference support
 assets, but no local recordings, environments or ignored model weights. See
@@ -161,14 +178,16 @@ not establish full-file checksum equality.
 
 Real focused Scribe verification produced 82 partial and 20 committed events;
 transcript text was not persisted. A separate bounded operator check verified
-the frozen real model across all seven sources, with complete score cohorts at
-observation ends of 5 and 7 seconds. Startup took 21.415 seconds and the check
+the frozen real model on T4 across all seven sources, with complete score cohorts
+at observation ends of 5 and 7 seconds. Startup took 21.415 seconds and the check
 finished in 30.746 seconds, with owned GPU stop and source cleanup confirmed and
 no errors. The complete public browser Auto path remains unverified.
 
 Cold provider queueing can exceed the worker's 90-second WebSocket `open_timeout`:
 the public AI probe encountered about 906 seconds of queueing before its four
 GPU requests later finished. This provider delay remains an operational limit.
+A public browser AI attempt also exceeded that timeout while four T4 requests
+queued for about 176 seconds. It did not verify the joined public Auto path.
 An uncertain cleanup fails closed and requires operator reconciliation before
 further paid starts; a successful bounded operator check does not guarantee
 public cold-start latency.

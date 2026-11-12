@@ -250,7 +250,7 @@ class ClassifierWorker:
         return self.scorer.predict_scores(features)
 
 
-@app.cls(image=image, gpu=GPU, cpu=(4, 8), memory=(4096, 8192),
+@app.cls(image=image, gpu=["T4", "L4"], cpu=(4, 8), memory=(4096, 8192),
          volumes={'/models': models}, max_containers=MAX_GPU_WORKERS, min_containers=0,
          secrets=[modal.Secret.from_name('matchpulse-inference-replay-auth')],
          buffer_containers=0, scaledown_window=5, timeout=4000,

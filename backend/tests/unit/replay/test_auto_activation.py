@@ -189,7 +189,8 @@ def test_off_during_pre_submission_control_cancels_without_spending_service_budg
 def test_early_worker_stop_requires_a_new_click_and_retains_service_time_and_all_previous_reservations():
     async def scenario():
         bridge = FakeBridge()
-        session, clock, _ = await setup(bridge=bridge)
+        # Two explicit local starts retain enough allowance for L4 startup too.
+        session, clock, _ = await setup(bridge=bridge, budget=1.2)
         try:
             auto(session)
             await session._control_tick()
@@ -208,10 +209,10 @@ def test_early_worker_stop_requires_a_new_click_and_retains_service_time_and_all
             await session._control_tick()
             specs = [call[1] for call in bridge.calls if call[0] == 'start']
             assert len(specs) == 2 and specs[-1]['max_duration_seconds'] == 70
-            assert specs[-1]['max_estimated_cost_usd'] == pytest.approx(1 - reserved)
+            assert specs[-1]['max_estimated_cost_usd'] == pytest.approx(1.2 - reserved)
             assert session._monitor_started_at == started
             assert session._restarts == old_restarts
-            assert reserved < session._reserved_compute_usd <= 1
+            assert reserved < session._reserved_compute_usd <= 1.2
         finally:
             await session.close()
 

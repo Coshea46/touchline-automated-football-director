@@ -29,6 +29,11 @@ a two-second stride. The selected temporal GRU runs on CPU inside those workers
 using its released `shots3_10` head. Compact scores travel over private worker
 WebSockets to the CPU backend, which sends director state to the browser.
 
+T4/L4 capacity fallback changes worker resource availability while preserving
+the frozen model, raw `(75,215)` windows, seven-source assignment and source/clock
+contracts. L4 verification remains pending. Public AI grants reserve $0.70 for
+up to 120 seconds under the [hosted admission limits](modal-backend.md#configuration-and-durable-admission).
+
 The backend validates timestamps, freshness, sequence, model/session identity and
 clock epochs. Actual browser playback grants inference permits. Pauses, seeks,
 stalls and disconnections update those permits; bounded queues and finite leases
@@ -155,11 +160,12 @@ Existing Modal GPU workers, the owner's private S3 recordings and isolated
 ElevenLabs caption runtime retain their roles. Verification on 12 November 2026
 passed HTTP/S3 checks, seven-source browser decoding and manual switching with
 preserved nodes, nonzero reload resume, independent visitor WebSocket isolation
-and focused Scribe partial/committed delivery. A separate bounded operator check
+and focused Scribe partial/committed delivery. A separate bounded T4 operator check
 verified complete real-model inference cohorts across all seven sources and
 confirmed owned GPU stop/source cleanup. The complete public browser Auto path
-remains unverified. Cold provider queueing can exceed the 90-second worker
-connection timeout; uncertain cleanup fails closed pending operator reconciliation.
+remains unverified, and no L4 result is claimed. Cold provider queueing can exceed
+the 90-second worker connection timeout; uncertain cleanup fails closed pending
+operator reconciliation.
 See [hosted verification status](modal-backend.md#frontend-connection-and-verification).
 Existing `MATCHPULSE_*` variables and `matchpulse` resource/runtime names remain
 compatibility identifiers.

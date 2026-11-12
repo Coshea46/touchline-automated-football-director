@@ -33,7 +33,7 @@ class Admission:
         if self.denial:
             raise AdmissionDenied(self.denial, 12)
         self.acquired.append((session_id, peer))
-        return {"duration_seconds": 120, "reserved_usd": .60}
+        return {"duration_seconds": 120, "reserved_usd": .70}
 
     async def release_ai(self, session_id, confirmed=False):
         self.released.append((session_id, confirmed))
@@ -65,7 +65,7 @@ class Factory:
             source_url="https://recordings.invalid/synthetic.mp4")])
         prepared = SessionConfig(monitor=True, mode="real", model_version=NEW_MODEL_VERSION,
             checkpoint=NEW_MODEL_VERSION, max_duration_seconds=120,
-            max_estimated_cost_usd=.60, max_restarts=0, gpu_workers=1)
+            max_estimated_cost_usd=.70, max_restarts=0, gpu_workers=1)
         session = await ReplaySession(registry, session_id=session_id,
             prepared_config=prepared, bridge_factory=lambda: bridge,
             caption_worker=worker, activation_guard=guard,

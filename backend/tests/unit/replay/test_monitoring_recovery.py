@@ -33,7 +33,7 @@ def test_restart_cost_reservations_enforce_whole_session_budget():
     async def scenario():
         bridge = FakeBridge()
         clock = Clock()
-        session = await ReplaySession(registry(), config=configuration(max_estimated_cost_usd=0.2),
+        session = await ReplaySession(registry(), config=configuration(max_estimated_cost_usd=0.25),
                                        bridge=bridge, now=clock, monotonic=clock).initialize()
         session.connect("viewer")
         session.receive("viewer", playback(session))
@@ -222,7 +222,7 @@ def test_seek_restarts_closed_eof_shard_group_but_keeps_active_shards_on_normal_
 def test_partial_eof_seek_restart_uses_existing_allowance_instead_of_creating_budget():
     async def scenario():
         bridge = FakeBridge()
-        session = await ReplaySession(registry(), config=configuration(max_estimated_cost_usd=0.2), bridge=bridge,
+        session = await ReplaySession(registry(), config=configuration(max_estimated_cost_usd=0.25), bridge=bridge,
                                        session_id="session").initialize()
         session.connect("viewer")
         session.receive("viewer", playback(session, position=10))
@@ -233,7 +233,7 @@ def test_partial_eof_seek_restart_uses_existing_allowance_instead_of_creating_bu
         assert session.error_code == "session_budget_reached" and session._finished
         assert session._handle is None
         assert len([call for call in bridge.calls if call[0] == "start"]) == 1
-        assert session.metrics["reserved_compute_usd"] < 0.2
+        assert session.metrics["reserved_compute_usd"] < 0.25
         await session.close()
 
     asyncio.run(scenario())
