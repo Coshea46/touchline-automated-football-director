@@ -107,10 +107,16 @@ started again with a fresh lease, subject to the hourly and spending limits.
 
 The owner initially authorized $10 of additional available public-demo allowance,
 giving a $12.60 cap with the earlier $2.60 reservations. The later authorization
-to prioritize startup speed over cost enables a bounded $25 cumulative/UTC-day
+to prioritize startup speed over cost enables a bounded $100 cumulative/UTC-day
 application reservation cap, with all historical charges retained. Warm GPU/API
 containers are billed independently of this per-run ledger, including while idle;
 the application cap does not stop those infrastructure charges.
+At the observed eight-T4 floor, GPUs alone are approximately $5.43/hour
+($130.36 per continuous day), calculated from [Modal's T4 price](https://modal.com/pricing)
+and the [1.15x broad-region multiplier](https://modal.com/docs/guide/region-selection).
+CPU, memory, storage and data transfer are additional; L4 replacement capacity
+would cost more. Keeping this floor running is intentional under the owner's
+cost waiver and is not covered by the $100 application reservation limit.
 The generic code fallback remains $1.20/day and $3 total if no explicit
 funding is supplied; that fallback cannot admit a $2.60 Director run.
 Reservations are non-refundable; changing the configured allowance does not
@@ -121,8 +127,12 @@ application estimates and admission limits, not a provider-enforced billing cap.
 The deployed backend uses these explicit nonsecret settings:
 
 ```dotenv
-TOUCHLINE_AI_DAILY_BUDGET_USD=25.00
-TOUCHLINE_AI_TOTAL_BUDGET_USD=25.00
+TOUCHLINE_AI_DAILY_BUDGET_USD=100.00
+TOUCHLINE_AI_TOTAL_BUDGET_USD=100.00
+TOUCHLINE_ADMISSION_STORE=dynamodb
+TOUCHLINE_ADMISSION_DYNAMODB_TABLE=touchline-admission
+AWS_ROLE_ARN=arn:aws:iam::709860105019:role/TouchlineBackendRuntime
+MATCHPULSE_S3_MEDIA_ORIGINS=split
 MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT=110
 ```
 
@@ -203,6 +213,16 @@ The frontend gives the focused recording first access to network/decoder resourc
 before starting untouched previews; all seven players remain mounted and any
 already-started preview remains warm.
 
+Private browser media alternates four regional and three dual-stack S3 URLs
+when `MATCHPULSE_S3_MEDIA_ORIGINS=split`. Both are independently SDK-signed for the
+same configured bucket and key. The [AWS dual-stack endpoint](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/dual-stack-endpoints.html)
+supports IPv4 and IPv6. This gives HTTP/1.1 browsers two origins instead of
+queuing a seventh long video download behind six occupied connections. Canonical
+worker GET, caption HEAD/GET, verified object digest, offsets and fixture metadata
+remain unchanged. The shared authorization deadline is the earliest of all
+published signatures. Default `single` mode remains available; unsupported split
+adapters or mismatched alternate locators fail closed.
+
 The inference deployment allows T4/L4 capacity fallback while retaining the
 frozen selected model, seven source readers, raw `(75,215)` feature windows and
 the existing playback-permit/clock contract. GPU availability remains a provider
@@ -216,6 +236,82 @@ assets, but no local recordings, environments or ignored model weights. See
 [private S3 access](private-s3.md) for OIDC, expiry and GET/HEAD authorization.
 
 ## Frontend connection and verification
+
+**Latest deployed result:** consistent five-second startup is not established.
+The fourth strict warm browser check measured Director On at **6.743 and 7.426
+seconds from navigation**, or **2.143 and 2.759 seconds after factual native
+playback readiness**. First complete seven-source model cohorts arrived at
+17.054 and 19.278 seconds; both visitors had overlapping real inference and
+advancing cohorts without page, socket, server-frame or reconnect errors.
+The source-origin fix was confirmed: each visitor received all seven HTTP 206
+responses across four regional and three dual-stack connections, and all seven
+videos obtained metadata. The former indefinitely queued seventh request was
+resolved. Only five and two decoders, respectively, produced frames before the
+bounded test ended; previews were awaiting native seeks, and the focused clock
+also stalled. Bandwidth/decoder pressure is consistent with these observations,
+but its precise contribution is not isolated. The full browser receipt remains
+failed. Earlier faster readiness measurements below do not override this result
+or guarantee five-second navigation startup, cold starts or overflow capacity.
+
+One fourth-check session did not confirm its remote stopped lifecycle. Its
+reservation correctly remained open after UI Off, and the first ledger audit
+failed that cleanup condition. The operator stopped the old CPU and GPU apps,
+verified both old applications had zero tasks, then transactionally closed only
+that exact Director permit and its matching owner. All other records, including
+the two earlier unresolved historical permits, remained unchanged; no money was
+refunded. The ledger retained 15 reservations totaling $27.14. This confirmed
+termination and financial reconciliation does not turn the failed timing or
+preview-decode receipt into a pass. The warm services were redeployed afterward;
+no further paid browser test was launched.
+
+The third warm startup check on 12 November 2026 opened two fresh public visitors
+simultaneously. Director On appeared at **4.463 and 4.132 seconds from navigation**,
+or 2.340 and 2.388 seconds after their first factual native playback reports.
+Both used the frozen real model, had overlapping active inference, captions off,
+and no explicit Auto On request. First complete seven-source score cohorts arrived
+at 13.466 and 11.721 seconds from navigation; readiness within five seconds does
+not mean a complete scored observation window is available within five seconds.
+The check recorded five and seven advancing complete cohorts in clock epoch zero,
+with advancing native playback and zero page, socket, server-frame or reconnect
+errors. Both UI stop acknowledgements and component-permit closure were verified.
+
+The complete browser receipt still failed its separate preview-decode condition:
+both browsers had decoded six of seven previews when its short extra wait ended
+at about 24 seconds. The seventh had no media error but had not produced a frame.
+The receipt remains failed; the measured five-second Director readiness result
+is narrower than a successful complete browser check. Earlier warm attempts also
+remain recorded as failures; this is a two-visitor warm measurement, not a cold
+start or arbitrary-concurrency guarantee. Eight workers support two warm starts;
+additional demand or provider replacement can require cold capacity.
+
+The admission change passed 1,081 tests with one optional Torch skip, plus
+installed-wheel verification. The unchanged frontend had passed 240 tests and
+its production build. DynamoDB migration preserved all 11 existing reservations
+($16.74), both unresolved historical owners and the peer salt. After the startup
+check, the permanent ledger held 13 reservations ($21.94); both new component
+permits were closed, and total counters matched every historical amount. The old
+SQLite volume and exact pre-migration backup were retained. The new scoped
+backend OIDC role can read recordings and access the admission table; the prior
+S3-only role is unchanged.
+
+ASGI readers now continue processing factual playback, Off and disconnect while
+durable admission runs. Pending requests have per-component intent/connection
+fences, and stale grants are closed before any provider starts. The deployed
+DynamoDB store avoids volume commits on admission: measured creation writes took
+0.058–0.144 seconds and Director reservation writes 0.093–0.110 seconds.
+
+A separate unpaid native-media diagnostic then observed six HTTP/1.1 206 video
+streams occupying six connections for about 119 seconds, while the seventh
+request remained pending with zero bytes. Auto was cancelled before the first
+factual playback report, no paid feature became active, and its visitor had no
+financial permit in the audited ledger. This confirmed transport connection
+starvation rather than a short decode polling window. The browser-origin split
+described above passed 1,103 backend tests, one optional Torch skip, and package
+verification. Read-only AWS preflight checked all seven objects through both
+endpoints: matching ETag/length, signed HEAD, one-byte HTTP 206 and production
+CORS. The prior failed browser receipts remain unchanged.
+
+The historical verification notes below describe their stated earlier deployments.
 
 Set all three public build settings in Vercel:
 
