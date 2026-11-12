@@ -214,8 +214,15 @@ native video retained buffered future data and kept playing. The player now
 preserves the actual clock in that case; `waiting`, seeking and insufficient
 readiness still revoke playback permits. Regression tests also verify that
 automatic handoff keeps reporting the promoted video's advancing native time.
-This fix has not been rechecked with paid AI, and its role in the live score
-shortfall is unproven.
+The fix passed all 233 frontend tests and the production build, then an unpaid
+check against the deployed public site. That browser decoded and manually
+switched all seven recordings with preserved player nodes and zero measured
+switch-clock deviation, resumed the same session after reload, and reported
+0.885 seconds of native clock advancement after an injected buffered network
+stall. Auto and captions remained off, no paid enable request was sent, the
+browser closed, and no page, media, socket or CORS errors occurred. This fix has
+not been rechecked with paid AI, and its role in the live score shortfall is
+unproven.
 
 Cold provider queueing exceeded the earlier 90-second WebSocket `open_timeout`:
 the public AI probe encountered about 906 seconds of queueing before its four
