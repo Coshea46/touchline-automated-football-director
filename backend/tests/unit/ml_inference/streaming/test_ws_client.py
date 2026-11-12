@@ -106,3 +106,37 @@ def test_only_bounded_integer_http_status_is_logged(status, caplog):
 def test_response_status_is_supported_without_logging_the_response_or_exception(caplog):
     record = fail_transport('connect', FixtureTransportError(429, response=True), caplog)
     assert record.args[3] == 429
+
+
+def test_environment_can_extend_only_connection_deadline_to_110_without_changing_auth_or_other_limits(monkeypatch):
+    monkeypatch.setenv('MATCHPULSE_MODAL_WS_URL', 'https://fixture.modal.run')
+    monkeypatch.setenv('MATCHPULSE_MODAL_WS_TOKEN', SECRET)
+    monkeypatch.delenv('MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT', raising=False)
+    assert ReplayWebSocketClient.from_env().connect_timeout == 90
+    monkeypatch.setenv('MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT', '110')
+    client = ReplayWebSocketClient.from_env()
+    assert client.connect_timeout == 110 and client._token == SECRET
+    assert client._url == 'wss://fixture.modal.run/session'
+    assert (client.stop_timeout, client.send_timeout, client.read_timeout, client.control_interval) == (4, 2, 15, .25)
+
+
+@pytest.mark.parametrize('value', [True, False, None, '110', 0, -1, 110.001, float('nan'), float('inf'), -float('inf')])
+def test_constructor_rejects_invalid_connection_deadlines(value):
+    with pytest.raises(ValueError, match='connection deadline'):
+        ReplayWebSocketClient('https://fixture.modal.run', SECRET, connect_timeout=value)
+
+
+@pytest.mark.parametrize('value', ['110.001', '111', 'nan', 'inf', '-inf', 'true', 'false', '', '0', '-1'])
+def test_environment_rejects_invalid_connection_deadlines(value, monkeypatch):
+    monkeypatch.setenv('MATCHPULSE_MODAL_WS_URL', 'https://fixture.modal.run')
+    monkeypatch.setenv('MATCHPULSE_MODAL_WS_TOKEN', SECRET)
+    monkeypatch.setenv('MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT', value)
+    with pytest.raises(ValueError, match='connection deadline'):
+        ReplayWebSocketClient.from_env()
+
+
+@pytest.mark.parametrize('option,value', [('stop_timeout', 5.01), ('send_timeout', 5.01),
+    ('read_timeout', 30.01), ('control_interval', .251), ('read_timeout', 110), ('stop_timeout', float('nan'))])
+def test_longer_connection_deadline_does_not_relax_stream_control_or_shutdown_limits(option, value):
+    with pytest.raises(ValueError, match='bounded'):
+        ReplayWebSocketClient('https://fixture.modal.run', SECRET, connect_timeout=110, **{option: value})

@@ -631,6 +631,25 @@ describe('backend WebSocket', () => {
     expect(socket().sent.at(-1)).toMatchObject({ type: 'playback', position: 100.75 });
   });
 
+  test('a promoted player keeps publishing its advancing native clock without timeupdate events', () => {
+    jest.useFakeTimers();
+    try {
+      render(<App />);
+      join();
+      const nodes = [...document.querySelectorAll('.persistent-player video')];
+      send(recommend());
+      const promoted = nativePlayer(3);
+      expect(screen.getByLabelText(`${FEEDS[2].label} video`)).toBe(promoted);
+      for (const position of [101, 120, 190]) {
+        promoted.currentTime = position;
+        act(() => jest.advanceTimersByTime(250));
+        expect(socket().sent.filter((message) => message.type === 'playback').at(-1))
+          .toMatchObject({ match_id: 'cam-3', position, available: true, stalled: false });
+      }
+      nodes.forEach((node, index) => expect(document.querySelectorAll('.persistent-player video')[index]).toBe(node));
+    } finally { jest.useRealTimers(); }
+  });
+
   test('a stale observation is rejected using the current native clock before promotion', () => {
     render(<App />);
     join();

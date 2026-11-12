@@ -274,7 +274,10 @@ class ReplayWebSocketClient(ReplayClient):
         if not isinstance(token, str) or not token or len(token) > 4096 or '\n' in token or '\r' in token:
             raise ValueError('Replay WebSocket authentication token is required')
         self._url, self._token = _endpoint(url, allow_loopback), token
-        for value in (connect_timeout, stop_timeout, send_timeout, read_timeout, control_interval):
+        if (isinstance(connect_timeout, bool) or not isinstance(connect_timeout, (int, float))
+                or not 0 < connect_timeout <= 110):
+            raise ValueError('Replay WebSocket connection deadline must be positive and at most 110 seconds')
+        for value in (stop_timeout, send_timeout, read_timeout, control_interval):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 90:
                 raise ValueError('Replay WebSocket deadlines must be positive and bounded')
         if stop_timeout > 5 or send_timeout > 5 or read_timeout > 30 or control_interval > .25:
@@ -289,7 +292,15 @@ class ReplayWebSocketClient(ReplayClient):
 
     @classmethod
     def from_env(cls):
-        return cls(os.environ.get('MATCHPULSE_MODAL_WS_URL'), os.environ.get('MATCHPULSE_MODAL_WS_TOKEN'))
+        raw = os.environ.get('MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT', '90')
+        try:
+            if isinstance(raw, bool):
+                raise ValueError
+            connect_timeout = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError('Invalid Replay WebSocket connection deadline') from None
+        return cls(os.environ.get('MATCHPULSE_MODAL_WS_URL'), os.environ.get('MATCHPULSE_MODAL_WS_TOKEN'),
+                   connect_timeout=connect_timeout)
 
     def _worker(self, app, name):
         if app != APP_NAME or name != 'ReplayWorker':

@@ -8,6 +8,13 @@ Our hackathon demo replays seven prerecorded Premier League broadcasts. The vide
 
 > **Demo note:** These are prerecorded matches, not live broadcasts. Our prediction model is experimental. Model scores are relative rankings, **not** calibrated probabilities of a goal.
 
+[Open the public demo](https://touchline-football-director.vercel.app). Each visitor
+gets an independent replay starting at 00:00:00. Auto and captions start off;
+paid AI is rate limited and subject to a small total allowance. Automatic
+switching and captions have been observed in the deployed browser, while
+sustained seven-source scoring remains unverified in that joined path. See the
+[deployment verification record](docs/modal-backend.md#frontend-connection-and-verification).
+
 ## What you can try
 
 - **Watch seven matches:** One large player, six selectable previews, and playback that stays aligned when you switch.
@@ -172,7 +179,11 @@ ELEVENLABS_API_KEY=
 
 Keep credentials server-side. Never commit `.env`. Without a key, the relevant feature shows an explanatory unavailable state rather than invented data.
 
-Live captions default to **On** with a valid key and active playback. Only the focused match is transcribed. Paid caption usage has its own configured duration and estimated budget limits, independent of Modal GPU monitoring.
+Local live captions default to **On** with a valid key and active playback. The
+public hosted demo starts with captions off and requires paid-work admission.
+Only the focused match is transcribed. Caption usage has its own configured
+duration and estimated budget limits; hosted admission also bounds the combined
+caption and GPU session.
 
 ## Project structure
 

@@ -252,6 +252,31 @@ test('background media events cannot change the focused playback state or recove
   expect(fixture.clock.current.time).toBe(250);
 });
 
+test('a network stalled event with decoded buffered playback does not freeze the promoted native clock', () => {
+  const fixture = pool();
+  fixture.readyAll();
+  fixture.focus(3);
+  const promoted = fixture.video(3);
+  Object.defineProperty(promoted, 'readyState', { configurable: true, value: 4 });
+  fireEvent.stalled(promoted);
+  promoted.currentTime = 251;
+  fireEvent.timeUpdate(promoted);
+  fixture.clock.current.sample?.();
+  expect(fixture.clock.current.stalled).toBe(false);
+  expect(fixture.clock.current.time).toBe(251);
+  Object.defineProperty(promoted, 'readyState', { configurable: true, value: 1 });
+  fireEvent.waiting(promoted);
+  promoted.currentTime = 252;
+  fireEvent.timeUpdate(promoted);
+  fixture.clock.current.sample?.();
+  expect(fixture.clock.current.stalled).toBe(true);
+  expect(fixture.clock.current.time).toBe(251);
+  Object.defineProperty(promoted, 'readyState', { configurable: true, value: 4 });
+  fireEvent.canPlay(promoted);
+  expect(fixture.clock.current.stalled).toBe(false);
+  expect(fixture.clock.current.time).toBe(252);
+});
+
 test('unmount stops and silences all persistent decoders and removes the active sample callback', () => {
   const fixture = pool();
   fixture.readyAll();

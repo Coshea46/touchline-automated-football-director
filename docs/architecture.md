@@ -31,7 +31,7 @@ WebSockets to the CPU backend, which sends director state to the browser.
 
 T4/L4 capacity fallback changes worker resource availability while preserving
 the frozen model, raw `(75,215)` windows, seven-source assignment and source/clock
-contracts. L4 verification remains pending. Public AI grants reserve $0.70 for
+contracts. A public browser run used three T4 workers and one L4 worker. Public AI grants reserve $0.70 for
 up to 120 seconds under the [hosted admission limits](modal-backend.md#configuration-and-durable-admission).
 
 The backend validates timestamps, freshness, sequence, model/session identity and
@@ -161,11 +161,14 @@ ElevenLabs caption runtime retain their roles. Verification on 12 November 2026
 passed HTTP/S3 checks, seven-source browser decoding and manual switching with
 preserved nodes, nonzero reload resume, independent visitor WebSocket isolation
 and focused Scribe partial/committed delivery. A separate bounded T4 operator check
-verified complete real-model inference cohorts across all seven sources and
-confirmed owned GPU stop/source cleanup. The complete public browser Auto path
-remains unverified, and no L4 result is claimed. Cold provider queueing can exceed
-the 90-second worker connection timeout; uncertain cleanup fails closed pending
-operator reconciliation.
+verified complete real-model inference cohorts across all seven sources. The
+final public browser run used T4/L4 workers, observed automatic switching and
+focused captions, and confirmed cleanup. Its strict repeated seven-source score
+cohort check failed; sustained scoring in that joined path remains unverified.
+The hosted worker connection
+deadline is 110 seconds; the generic client default remains 90 seconds and the
+public AI permit remains 120 seconds. Cold provider queueing can outlast these
+startup bounds; uncertain cleanup fails closed pending operator reconciliation.
 See [hosted verification status](modal-backend.md#frontend-connection-and-verification).
 Existing `MATCHPULSE_*` variables and `matchpulse` resource/runtime names remain
 compatibility identifiers.

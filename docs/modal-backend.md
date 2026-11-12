@@ -84,8 +84,8 @@ The policy must commit a paid reservation before permitting provider work; a
 filesystem write alone is insufficient for a volume-backed cold restart. Its
 limits, cooldowns and conservative handling of uncertain cleanup apply across
 visitors. New public AI grants reserve $0.70 for up to 120 seconds. The deployed
-$2.80 UTC-day allowance permits at most four new grants on a fresh day, subject
-to the unchanged $3.00 total allowance, one admitted AI session at a time and
+$3.30 UTC-day allowance permits at most four new grants on a fresh day, subject
+to the $3.30 total allowance, one admitted AI session at a time and
 one grant per IP per hour. The generic `AdmissionPolicy` code fallback remains
 $1.20 per UTC day (at most one new $0.70 grant) when no explicit daily setting is
 supplied. Reservations are non-refundable;
@@ -96,16 +96,22 @@ application estimates and admission limits, not a provider-enforced billing cap.
 The deployed backend uses these explicit nonsecret settings:
 
 ```dotenv
-TOUCHLINE_AI_DAILY_BUDGET_USD=2.80
-TOUCHLINE_AI_TOTAL_BUDGET_USD=3.00
+TOUCHLINE_AI_DAILY_BUDGET_USD=3.30
+TOUCHLINE_AI_TOTAL_BUDGET_USD=3.30
+MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT=110
 ```
 
-The two earlier $0.60 reservations remain charged at their original amounts.
-Their $1.20 usage leaves room for two further $0.70 grants within the 12 November
-UTC-day allowance and the unchanged total limit. The pending cloud-browser
-verification will reserve $0.70 even if startup fails. After that reservation,
-$1.10 of the global allowance can support one further $0.70 visitor grant,
-subject to the daily/IP limits and confirmed cleanup. No L4 success is claimed.
+The four public verification reservations remain charged at their original
+amounts ($0.60, $0.60, $0.70 and $0.70), totaling $2.60. The final committed-ledger
+audit confirmed all four leases closed without refunding any reservation. One
+$0.70 visitor grant remains within both current allowances, subject to the
+daily/IP limits. These reservations and two separate $0.60 operator reservations
+leave $0.50 of the owner's $5 verification allocation for CPU/storage overhead;
+they are conservative estimates, not a reconciled provider bill.
+
+The hosted worker connection deadline is 110 seconds; the generic client default
+remains 90 seconds. This setting changes connection startup only. The public AI
+permit remains capped at 120 seconds and is not extended by slow startup.
 
 An uncleared paid lease blocks new starts even after its timestamp expires or
 the container restarts. Confirmed cleanup releases the active slot; uncertain
@@ -143,8 +149,9 @@ contracts are unchanged.
 The inference deployment allows T4/L4 capacity fallback while retaining the
 frozen selected model, seven source readers, raw `(75,215)` feature windows and
 the existing playback-permit/clock contract. GPU availability remains a provider
-constraint. L4 verification is pending; the earlier successful operator result
-below was measured on T4.
+constraint. The final public browser run used three T4 workers and one L4 worker;
+this was confirmed separately from provider container metadata. The earlier
+successful operator result below was measured on T4.
 
 Recordings stay in private S3 and are read directly by authorized consumers.
 The CPU image includes packaged source metadata and frozen inference support
@@ -181,9 +188,36 @@ transcript text was not persisted. A separate bounded operator check verified
 the frozen real model on T4 across all seven sources, with complete score cohorts
 at observation ends of 5 and 7 seconds. Startup took 21.415 seconds and the check
 finished in 30.746 seconds, with owned GPU stop and source cleanup confirmed and
-no errors. The complete public browser Auto path remains unverified.
+no errors.
 
-Cold provider queueing can exceed the worker's 90-second WebSocket `open_timeout`:
+The final public Chrome check admitted one ordinary visitor, decoded all seven
+recordings, enabled Auto through the UI, received real-model recommendations,
+observed an automatic source switch and advanced native playback by 90.656
+seconds while AI was enabled. Focused Scribe produced 74 valid partial and 16
+committed events. Turning captions and Auto off received the stopped lifecycle
+acknowledgement. The subsequent committed-ledger audit confirmed the permit
+closed, and backend/GPU statistics confirmed no queued or running inputs or
+containers. There were no page, media, socket, server-frame or CORS errors.
+
+The strict browser check nevertheless failed: it recorded four recommendations
+but retained only one complete seven-source score cohort, at observation end
+9 seconds, instead of the required two advancing cohorts in one clock epoch.
+Its cohort recorder resets history on an epoch change, so this receipt alone
+cannot distinguish lost earlier evidence from a sustained score-cadence problem.
+Automatic switching and captions have live evidence; sustained seven-source
+scoring in the joined public browser path remains unverified. No further paid
+verification was started after this result.
+
+An unpaid regression investigation subsequently reproduced a separate browser
+clock bug: a network `stalled` event cleared playback readiness even when the
+native video retained buffered future data and kept playing. The player now
+preserves the actual clock in that case; `waiting`, seeking and insufficient
+readiness still revoke playback permits. Regression tests also verify that
+automatic handoff keeps reporting the promoted video's advancing native time.
+This fix has not been rechecked with paid AI, and its role in the live score
+shortfall is unproven.
+
+Cold provider queueing exceeded the earlier 90-second WebSocket `open_timeout`:
 the public AI probe encountered about 906 seconds of queueing before its four
 GPU requests later finished. This provider delay remains an operational limit.
 A public browser AI attempt also exceeded that timeout while four T4 requests

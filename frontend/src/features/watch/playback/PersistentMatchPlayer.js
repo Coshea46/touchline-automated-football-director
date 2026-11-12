@@ -238,6 +238,12 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
       video.matchpulseReadyIdentity = null;
       if (active()) { clock.current.stalled = true; report(); }
     };
+    const fetchStalled = () => {
+      // A network fetch can stall while buffered native playback continues.
+      // Keep its factual clock live; waiting/insufficient data still revokes it.
+      if (video.readyState >= 3 && !video.seeking) return;
+      stalled();
+    };
     const ended = () => {
       state.ready = false;
       video.matchpulseReadySource = null;
@@ -259,7 +265,7 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
     };
     const listeners = { loadedmetadata: metadata, loadeddata: decoded, canplay: decoded, seeked: decoded,
       seeking, timeupdate: sample, ratechange: rate, volumechange: volume, play: playing, playing,
-      pause: paused, waiting: stalled, stalled, ended, error: mediaError };
+      pause: paused, waiting: stalled, stalled: fetchStalled, ended, error: mediaError };
     Object.entries(listeners).forEach(([name, handler]) => video.addEventListener(name, handler));
     actions.current = { sync, sample, audio, silence, completed, pause };
     state.ready = false; state.failed = false; state.seekTarget = null; state.needsAlignment = true;

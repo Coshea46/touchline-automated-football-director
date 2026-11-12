@@ -37,8 +37,9 @@ replay ownership, playback permits and director policy remain in
 
 - Seven distinct source readers/caches are distributed over four GPU workers
   by default (2+2+2+1), with T4/L4 capacity fallback in the deployment.
-  `MATCHPULSE_GPU_WORKERS` can select one through four workers. L4 verification
-  remains pending; GPU choice preserves the frozen model and contracts below.
+  `MATCHPULSE_GPU_WORKERS` can select one through four workers. A public browser
+  run used three T4 workers and one L4 worker; GPU choice preserves the frozen
+  model and contracts below.
 - Workers read encoded source media directly. Observations are sampled at 15 FPS;
   complete five-second windows contain 75 rows and advance every two seconds.
   Overlapping windows reuse observations rather than repeating YOLO detection.
@@ -148,10 +149,14 @@ entry points and caption subprocess startup without cloud calls.
 
 On 12 November 2026, a bounded T4 operator check produced complete real-model
 cohorts across all seven sources at observation ends of 5 and 7 seconds, with
-21.415-second startup and confirmed owned GPU/source cleanup. This is T4 evidence;
-the configured L4 capacity fallback remains unverified. Public browser Auto
-verification is also pending after T4 queueing exceeded the 90-second worker
-connection timeout. Manual seven-source browser playback and focused Scribe
+21.415-second startup and confirmed owned GPU/source cleanup. A later public
+browser run used three T4 workers and one L4 worker, observed automatic source
+switching and focused Scribe delivery, and confirmed cleanup. Its strict check
+for repeated complete seven-source score cohorts failed; sustained scoring in
+the joined public path remains unverified. Earlier T4 queueing exceeded the
+90-second worker connection timeout. Hosted configuration now sets
+`MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT=110`; the generic default stays 90 seconds
+and the public AI permit remains 120 seconds. Manual seven-source browser playback and focused Scribe
 delivery passed separately. Current public reservations are $0.70 for up to
 120 seconds; see [hosted admission and verification](../modal-backend.md).
 
