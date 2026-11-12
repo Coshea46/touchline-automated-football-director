@@ -185,6 +185,8 @@ def run_replay_session(spec, detector, control, publish, *, scorer,
         first_pending, previous_permit = None, clock['position']
         last_progress_at = time.monotonic()
         initialization_started, startup_complete, has_progress = time.monotonic(), False, False
+        metrics.pop('startup_ready_seconds', None)
+        metrics.pop('startup_ready_epoch', None)
         source_updates = {m['match_id']: m for m in clock.get('sources', [])}
         for registered in spec['matches']:
             match = {**registered, **source_updates.get(registered['match_id'], {})}
@@ -348,6 +350,8 @@ def run_replay_session(spec, detector, control, publish, *, scorer,
             ready_for_viewer = startup_ready()
             if ready_for_viewer and not startup_complete:
                 startup_complete = True
+                metrics['startup_ready_seconds'] = max(0.0, time.monotonic() - initialization_started)
+                metrics['startup_ready_epoch'] = epoch
                 last_progress_at = time.monotonic()
             if ((not startup_complete or startup_waiting or barrier_was_waiting)
                     and time.monotonic() - initialization_started >= min(120, duration)):

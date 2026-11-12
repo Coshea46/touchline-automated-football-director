@@ -38,7 +38,9 @@ replay ownership, playback permits and director policy remain in
 - Seven distinct source readers/caches are distributed over four GPU workers
   by default (2+2+2+1), with T4/L4 capacity fallback in the deployment.
   `MATCHPULSE_GPU_WORKERS` can select one through four workers. A public browser
-  run used three T4 workers and one L4 worker; GPU choice preserves the frozen
+  run used three T4 workers and one L4 worker. The pool now keeps eight replay
+  containers warm, prefers L4 with T4 fallback, and preloads both models; overflow
+  containers have a 300-second idle window. GPU choice preserves the frozen
   model and contracts below.
 - Workers read encoded source media directly. Observations are sampled at 15 FPS;
   complete five-second windows contain 75 rows and advance every two seconds.

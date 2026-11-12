@@ -2,25 +2,110 @@
 
 
 import json
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import pytest
 from touchline.ml_inference.models.release import LEGACY_MODEL_VERSION, NEW_MODEL_VERSION
 from tests.support.ml_inference.worker import load_app
 from tests.support.ml_inference.client import session, MemoryStore
 
 
-def test_replay_worker_prefers_t4_with_l4_fallback_in_one_bounded_pool(monkeypatch):
+def test_replay_worker_prefers_l4_with_t4_fallback_in_one_bounded_pool(monkeypatch):
     _, registrations, volumes = load_app(monkeypatch)
     limits = registrations["ReplayWorker"]
-    assert limits["gpu"] == ["T4", "L4"] and limits["max_containers"] == 40
+    assert limits["gpu"] == ["L4", "T4"] and limits["max_containers"] == 40
     assert registrations["FeatureWorker"]["gpu"] == "T4"
     assert "region" not in limits and "routing_region" not in limits
-    assert limits["min_containers"] == 0 and limits["buffer_containers"] == 0
-    assert limits["scaledown_window"] == 5 and limits["retries"] == 0
+    assert limits["min_containers"] == 8 and limits["buffer_containers"] == 0
+    assert limits["scaledown_window"] == 300 and limits["retries"] == 0
     assert 0 < limits["timeout"] <= 4000 and 0 < limits["startup_timeout"] <= 300
     assert limits["cpu"][1] <= 8 and limits["memory"][1] <= 8192
     assert volumes == ["matchpulse-inference-models"]
+
+
+def replay_load_fixture(monkeypatch, *, advertised_model=NEW_MODEL_VERSION, load_error=None):
+    """Real enter/scorer flow with synthetic CPU modules; no SDK/GPU/model calls."""
+    module, _, _ = load_app(monkeypatch)
+    events = []
+    monkeypatch.setattr(module, "Path", lambda value: Path(value).resolve())
+    monkeypatch.setattr(module.models, "reload", lambda: events.append("volume_reload"))
+    features = ModuleType("matchpulse.features")
+    detector_module = ModuleType("matchpulse.features.detector")
+    package = ModuleType("matchpulse")
+    package.__path__ = []
+    package.features = features
+    features.__path__ = []
+    features.DetectorConfig = lambda **kwargs: kwargs
+
+    class Detector:
+        def __init__(self, config):
+            events.append("detector_load")
+            assert config["device"] == "cuda:0" and config["half"] is True
+
+        def detect(self, images):
+            events.append("detector_warmup")
+            assert len(images) == 16 and all(image.shape == (720, 1280, 3) for image in images)
+
+    detector_module.YoloDetector = Detector
+    features.detector = detector_module
+    for name, value in {"matchpulse": package, "matchpulse.features": features,
+                        "matchpulse.features.detector": detector_module}.items():
+        monkeypatch.setitem(sys.modules, name, value)
+    monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace(setNumThreads=lambda count: None))
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: True, get_device_name=lambda index: "NVIDIA L4"),
+        set_num_threads=lambda count: None, __version__="offline", version=SimpleNamespace(cuda="offline")))
+    monkeypatch.setattr(module, "detector_runtime", lambda detector, half: {
+        "detector_device": "cuda:0", "detector_dtype": "torch.float16", "detector_fp16": half})
+    scorer = SimpleNamespace(readiness={"model_version": advertised_model})
+
+    def no_prediction(*args, **kwargs):
+        raise AssertionError("Preloading must not manufacture model scores")
+
+    scorer.predict_scores = no_prediction
+    def loader(target, *, model_version, device):
+        events.append("classifier_load")
+        assert target == (Path("/models").resolve() / NEW_MODEL_VERSION).resolve()
+        assert model_version == NEW_MODEL_VERSION and device == "cpu"
+        if load_error is not None:
+            raise load_error
+        return scorer
+    monkeypatch.setattr("touchline.ml_inference.models.classifiers.load_replay_scorer", loader)
+    return module, events, scorer
+
+
+def test_enter_preloads_selected_cpu_gru_after_detector_warmup_and_reuses_cache(monkeypatch):
+    module, events, scorer = replay_load_fixture(monkeypatch)
+    worker = module.ReplayWorker()
+    worker.load()
+    assert events == ["detector_load", "detector_warmup", "volume_reload", "classifier_load"]
+    spec = session(mode="real", model_version=NEW_MODEL_VERSION, checkpoint=NEW_MODEL_VERSION)
+    assert worker._scorer(spec) is scorer
+    assert worker._scorer(spec) is scorer
+    assert events.count("classifier_load") == events.count("volume_reload") == 1
+    assert worker.runtime["selected_model_preloaded"] is True
+    assert worker.runtime["preloaded_model_version"] == NEW_MODEL_VERSION
+    timings = ("imports_seconds", "detector_load_seconds", "warmup_seconds",
+               "classifier_preload_seconds", "initialization_seconds")
+    assert all(isinstance(worker.runtime[name], float) and worker.runtime[name] >= 0 for name in timings)
+    assert worker.runtime["initialization_seconds"] >= sum(worker.runtime[name] for name in timings[:-1])
+    with pytest.raises(ValueError, match="does not match"):
+        worker._scorer({**spec, "model_version": "unexpected-model"})
+    assert events.count("classifier_load") == 1
+
+
+@pytest.mark.parametrize("mismatched_model", [True, False])
+def test_enter_fails_closed_on_unready_selected_model_without_private_exception_text(monkeypatch, mismatched_model):
+    error = None if mismatched_model else FileNotFoundError("https://private.example/?token=never-publish-this")
+    module, events, _ = replay_load_fixture(monkeypatch,
+        advertised_model="wrong-model" if mismatched_model else NEW_MODEL_VERSION, load_error=error)
+    worker = module.ReplayWorker()
+    with pytest.raises(RuntimeError, match="^Selected replay model preload failed$") as failure:
+        worker.load()
+    assert "private.example" not in str(failure.value) and "never-publish-this" not in str(failure.value)
+    assert worker.runtime["selected_model_preloaded"] is False
+    assert "preloaded_model_version" not in worker.runtime and events.count("classifier_load") == 1
 
 
 def test_replay_worker_missing_bundle_publishes_only_sanitized_error(monkeypatch):

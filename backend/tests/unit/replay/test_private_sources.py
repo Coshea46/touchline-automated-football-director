@@ -196,3 +196,114 @@ def test_private_signer_uses_the_registry_region_and_local_credential_chain(monk
     assert seen["region"] == VIDEO_REGION
     assert seen["token_provider"] is None
     assert seen["env"]["AWS_ROLE_ARN"] == VIDEO_READER_ROLE
+
+
+def test_private_heads_overlap_with_bound_four_but_signing_and_publication_remain_ordered():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock, get_ident
+    class BlockingAccess(FakeAccess):
+        def __init__(self):
+            super().__init__()
+            self.lock, self.started, self.release = Lock(), Event(), Event()
+            self.active = self.maximum = 0
+            self.client_threads, self.signing_threads = [], []
+        def get_client(self):
+            self.client_threads.append(get_ident())
+            return self
+        def head_object(self, **kwargs):
+            with self.lock:
+                self.active += 1
+                self.maximum = max(self.maximum, self.active)
+                if self.active == 4:
+                    self.started.set()
+            try:
+                assert self.release.wait(3)
+                return super().head_object(**kwargs)
+            finally:
+                with self.lock:
+                    self.active -= 1
+        def _sign(self, *args):
+            self.signing_threads.append(get_ident())
+            return super()._sign(*args)
+        def close(self):
+            assert self.active == 0
+            super().close()
+    registry, _ = private_registry()
+    access = registry._access = BlockingAccess()
+    with ThreadPoolExecutor(max_workers=1) as owner:
+        future = owner.submit(registry.resolve)
+        try:
+            assert access.started.wait(2), "HEAD requests did not overlap"
+            assert access.maximum == 4 and registry._resolved == () and registry._identity_pins == {}
+            assert access.signatures == []
+        finally:
+            access.release.set()
+        resolved = future.result(timeout=2)
+        owner.submit(registry.close).result(timeout=2)
+    assert access.closed and access.maximum == 4
+    assert [source.match_id for source in resolved] == [f"cam-{i}" for i in range(1, 8)]
+    assert len(access.client_threads) == 1 and set(access.signing_threads) == set(access.client_threads)
+    assert [(key, method) for _, key, method in access.signatures] == [
+        (f"match-{i}.mp4", method) for i in range(1, 8) for method in ("GET", "HEAD")]
+    metrics = registry.resolve_metrics
+    assert metrics["succeeded"] and metrics["head_workers"] == 4 and metrics["scheduled_head_count"] == 7
+    assert all(0 <= metrics[name] <= metrics["elapsed_seconds"] for name in
+               ("client_setup_seconds", "head_wall_seconds", "presign_seconds"))
+    assert "PRIVATE" not in repr(metrics) and "match-" not in repr(metrics)
+
+
+def test_failed_parallel_head_batch_joins_before_queued_close_and_keeps_previous_complete_identity_set():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event, Lock
+    class FailingAccess(FakeAccess):
+        def __init__(self):
+            super().__init__()
+            self.lock, self.started, self.failed = Lock(), Event(), Event()
+            self.fail_now, self.release = Event(), Event()
+            self.block = False
+            self.active = 0
+        def head_object(self, **kwargs):
+            if not self.block:
+                return super().head_object(**kwargs)
+            with self.lock:
+                self.active += 1
+                if self.active == 4:
+                    self.started.set()
+            try:
+                if kwargs["Key"] == "match-1.mp4":
+                    assert self.fail_now.wait(3)
+                    self.failed.set()
+                    raise RuntimeError("PRIVATE_TOKEN&X-Amz-Signature=must-not-leak")
+                assert self.release.wait(3)
+                assert not self.closed
+                return super().head_object(**kwargs)
+            finally:
+                with self.lock:
+                    self.active -= 1
+        def close(self):
+            assert self.active == 0, "SDK client closed while HEAD still used it"
+            super().close()
+    registry, _ = private_registry()
+    access = registry._access = FailingAccess()
+    previous, pins = registry.resolve(), dict(registry._identity_pins)
+    access.block = True
+    with ThreadPoolExecutor(max_workers=1) as owner:
+        future = owner.submit(registry.resolve)
+        try:
+            assert access.started.wait(2)
+            access.fail_now.set()
+            assert access.failed.wait(2)
+            closing = owner.submit(registry.close)
+            assert not future.done() and not closing.done() and not access.closed
+            assert registry._resolved == previous and registry._identity_pins == pins
+        finally:
+            access.fail_now.set()
+            access.release.set()
+        with pytest.raises(StorageAuthorizationError, match="^source_access_unavailable$"):
+            future.result(timeout=2)
+        closing.result(timeout=2)
+    assert access.closed and access.active == 0
+    assert registry._resolved == previous and registry._identity_pins == pins
+    assert len(access.signatures) == 14  # Failure produced no partly refreshed signatures.
+    assert registry.resolve_metrics["succeeded"] is False
+    assert "PRIVATE" not in repr(registry.resolve_metrics)

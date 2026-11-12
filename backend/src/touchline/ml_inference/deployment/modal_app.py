@@ -11,6 +11,7 @@ from time import perf_counter
 import modal
 
 from touchline.ml_inference.config import APP_NAME, MODEL_VOLUME, PACKAGE_ROOT
+from touchline.ml_inference.models.release import NEW_MODEL_VERSION
 from touchline.ml_inference.streaming.contract import MAX_GPU_WORKERS
 
 PACKAGE = PACKAGE_ROOT
@@ -19,6 +20,11 @@ CONTAINERS = int(os.environ.get("MATCHPULSE_ML_WORKER_CONCURRENCY", "1"))
 TIMEOUT = int(os.environ.get("MATCHPULSE_ML_WORKER_TIMEOUT_SECONDS", "180"))
 SCALEDOWN = int(os.environ.get("MATCHPULSE_ML_SCALEDOWN_SECONDS", "5"))
 CLASSIFIER_TIMEOUT = int(os.environ.get("MATCHPULSE_ML_CLASSIFIER_TIMEOUT_SECONDS", "60"))
+# Eight already initialized workers cover two simultaneous four-shard visitors.
+# This is a retained capacity floor, not eight spare workers beside active runs.
+REPLAY_WARM_CONTAINERS = 8
+REPLAY_BUFFER_CONTAINERS = 0
+REPLAY_SCALEDOWN_SECONDS = 300
 if min(CONTAINERS, TIMEOUT, SCALEDOWN, CLASSIFIER_TIMEOUT) < 1:
     raise ValueError("Inference deployment resource values must be positive")
 
@@ -250,33 +256,37 @@ class ClassifierWorker:
         return self.scorer.predict_scores(features)
 
 
-@app.cls(image=image, gpu=["T4", "L4"], cpu=(4, 8), memory=(4096, 8192),
+@app.cls(image=image, gpu=["L4", "T4"], cpu=(4, 8), memory=(4096, 8192),
          # Ten independent visitors may each own up to four workers. This is
          # pool capacity; each individual run retains its four-worker bound.
-         volumes={'/models': models}, max_containers=10 * MAX_GPU_WORKERS, min_containers=0,
+         volumes={'/models': models}, max_containers=10 * MAX_GPU_WORKERS,
+         min_containers=REPLAY_WARM_CONTAINERS,
          secrets=[modal.Secret.from_name('matchpulse-inference-replay-auth')],
-         buffer_containers=0, scaledown_window=5, timeout=4000,
+         buffer_containers=REPLAY_BUFFER_CONTAINERS, scaledown_window=REPLAY_SCALEDOWN_SECONDS, timeout=4000,
          startup_timeout=300, retries=0, include_source=False)
 class ReplayWorker:
     """A single persistent GPU pool, multiplexing independent logical matches."""
 
     @modal.enter()
     def load(self):
+        started = perf_counter()
         import cv2
         import numpy as np
         import torch
         from matchpulse.features import DetectorConfig
         from matchpulse.features.detector import YoloDetector
 
-        started = perf_counter()
+        imports_seconds = perf_counter() - started
         if not torch.cuda.is_available():
             raise RuntimeError('Replay monitoring requires CUDA')
         cv2.setNumThreads(1)
         torch.set_num_threads(2)
+        detector_started = perf_counter()
         self.detector_config = DetectorConfig(weights='/opt/models/yolo26s.pt', device='cuda:0',
             half=True, image_size=640, batch_size=16, confidence=.15, ball_confidence=.08,
             person_class=0, ball_class=32)
         self.detector = YoloDetector(self.detector_config)
+        detector_load_seconds = perf_counter() - detector_started
         # One startup warmup, before viewers leave the explicit startup buffer.
         # These synthetic images never produce a score or success assertion.
         warmup_start = perf_counter()
@@ -286,10 +296,33 @@ class ReplayWorker:
                         'cuda': torch.version.cuda, 'container_id': os.environ.get('MODAL_TASK_ID'),
                         **detector_runtime(self.detector, True),
                         'warmup_seconds': perf_counter() - warmup_start,
-                        'initialization_seconds': perf_counter() - started}
+                        'imports_seconds': imports_seconds,
+                        'detector_load_seconds': detector_load_seconds,
+                        'selected_model_preloaded': False}
         self.runtime['numerical_threads'] = {key: os.environ.get(key) for key in
             ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS')}
         self.classifiers = {}
+        classifier_started = perf_counter()
+        try:
+            # Use the same immutable version/path/validation/cache as a real
+            # visitor, without invoking predictions or granting media permits.
+            self._scorer({'mode': 'real', 'checkpoint': NEW_MODEL_VERSION,
+                          'model_version': NEW_MODEL_VERSION})
+        except Exception:
+            # A loader exception can include a private path or URI. An unready
+            # container must fail startup without publishing that exception text.
+            raise RuntimeError('Selected replay model preload failed') from None
+        self.runtime['classifier_preload_seconds'] = perf_counter() - classifier_started
+        self.runtime['selected_model_preloaded'] = True
+        self.runtime['preloaded_model_version'] = NEW_MODEL_VERSION
+        self.runtime['initialization_seconds'] = perf_counter() - started
+        # A fixed-shape readiness record lets operators distinguish completed
+        # warm containers from queued/provisioning inputs without logging data.
+        import json
+        print(json.dumps({'event': 'replay_container_ready', 'gpu': self.runtime['gpu'],
+            'container_id': self.runtime['container_id'], 'selected_model_preloaded': True,
+            'initialization_seconds': self.runtime['initialization_seconds'],
+            'classifier_preload_seconds': self.runtime['classifier_preload_seconds']}, sort_keys=True), flush=True)
 
     def _scorer(self, spec):
         self._scorer_phase = 'load'

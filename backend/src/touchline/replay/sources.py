@@ -5,6 +5,7 @@ import math
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from urllib.parse import quote, urlsplit
 
@@ -123,6 +124,7 @@ class SourceRegistry:
         self._aws_env.setdefault("AWS_DEFAULT_REGION", self.region)
         self._resolved = ()
         self._identity_pins = {}
+        self.resolve_metrics = {}
 
     @classmethod
     def from_env(cls, env=None):
@@ -161,6 +163,57 @@ class SourceRegistry:
                    url_ttl_seconds=int(env.get("MATCHPULSE_SOURCE_URL_TTL", "3600")), aws_env=env)
 
     def resolve(self):
+        started = time.perf_counter()
+        metrics = {"source_count": len(self.sources), "scheduled_head_count": 0, "head_workers": 0,
+                   "client_setup_seconds": 0.0, "head_wall_seconds": 0.0,
+                   "presign_seconds": 0.0, "succeeded": False}
+        try:
+            result = self._resolve(metrics)
+            metrics["succeeded"] = True
+            return result
+        finally:
+            metrics["elapsed_seconds"] = time.perf_counter() - started
+            # Counts/durations only, including attempts that fail authorization.
+            self.resolve_metrics = metrics
+
+    def _private_heads(self, metrics):
+        sources = tuple(source for source in self.sources if source.key is not None)
+        if self.access != "presigned" or not sources:
+            return {}
+        try:
+            started = time.perf_counter()
+            try:
+                # Construct one shared low-level S3 client on its owning thread.
+                # Only read-only HEAD runs concurrently; signing stays serial.
+                if self._access is None and self._s3 is None:
+                    self._access = S3Access(env=self._aws_env, region=self.region,
+                                            now=self.now, token_provider=self._token_provider)
+                client = self._s3 if self._s3 is not None else self._access.get_client()
+            finally:
+                metrics["client_setup_seconds"] = time.perf_counter() - started
+            metrics.update(head_workers=min(4, len(sources)), scheduled_head_count=len(sources))
+            started = time.perf_counter()
+            try:
+                with ThreadPoolExecutor(max_workers=metrics["head_workers"], thread_name_prefix="source-head") as pool:
+                    futures = [(source.match_id, pool.submit(client.head_object,
+                                Bucket=self.bucket, Key=source.key)) for source in sources]
+                    try:
+                        return {match_id: future.result() for match_id, future in futures}
+                    except BaseException:
+                        for _, future in futures:
+                            future.cancel()
+                        # Join running HEADs before resolve can finish and its
+                        # owner can close the reusable AWS client.
+                        raise
+            finally:
+                metrics["head_wall_seconds"] = time.perf_counter() - started
+        except StorageAuthorizationError:
+            raise
+        except Exception:
+            raise StorageAuthorizationError("source_access_unavailable") from None
+
+    def _resolve(self, metrics):
+        heads = self._private_heads(metrics)
         resolved = []
         pins = dict(self._identity_pins)
         for source in self.sources:
@@ -172,23 +225,23 @@ class SourceRegistry:
                 continue
             if self.access == "presigned":
                 try:
-                    if self._access is None and self._s3 is None:
-                        self._access = S3Access(env=self._aws_env, region=self.region,
-                                                now=self.now, token_provider=self._token_provider)
-                    client = self._s3 if self._s3 is not None else self._access.get_client()
-                    head = client.head_object(Bucket=self.bucket, Key=source.key)
-                    if self._access is not None:
-                        get = self._access.presign_get(self.bucket, source.key, self.url_ttl_seconds)
-                        probe = self._access.presign_head(self.bucket, source.key, self.url_ttl_seconds)
-                        url, head_url = get.url, probe.url
-                        expires_at = min(get.expires_at, probe.expires_at)
-                    else:
-                        # Explicit injected clients are intended for deterministic
-                        # offline adapters; production uses the expiry-aware access layer.
-                        params = {"Bucket": self.bucket, "Key": source.key}
-                        url = client.generate_presigned_url("get_object", Params=params, ExpiresIn=self.url_ttl_seconds)
-                        head_url = client.generate_presigned_url("head_object", Params=params, ExpiresIn=self.url_ttl_seconds)
-                        expires_at = self.now() + self.url_ttl_seconds
+                    head = heads[source.match_id]
+                    started = time.perf_counter()
+                    try:
+                        if self._access is not None:
+                            get = self._access.presign_get(self.bucket, source.key, self.url_ttl_seconds)
+                            probe = self._access.presign_head(self.bucket, source.key, self.url_ttl_seconds)
+                            url, head_url = get.url, probe.url
+                            expires_at = min(get.expires_at, probe.expires_at)
+                        else:
+                            # Explicit injected clients are deterministic adapters;
+                            # production uses the expiry-aware access layer.
+                            params = {"Bucket": self.bucket, "Key": source.key}
+                            url = self._s3.generate_presigned_url("get_object", Params=params, ExpiresIn=self.url_ttl_seconds)
+                            head_url = self._s3.generate_presigned_url("head_object", Params=params, ExpiresIn=self.url_ttl_seconds)
+                            expires_at = self.now() + self.url_ttl_seconds
+                    finally:
+                        metrics["presign_seconds"] += time.perf_counter() - started
                     identity = source_identity(source.key, head.get("ETag"), head.get("ContentLength"), url)
                     if source_locator(head_url) != source_locator(url):
                         raise StorageAuthorizationError("source_authorization_locator_mismatch")

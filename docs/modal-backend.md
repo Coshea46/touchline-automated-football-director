@@ -32,7 +32,7 @@ The deployment uses these limits:
 | Setting | Value |
 |---|---:|
 | Maximum CPU containers | 1 |
-| Minimum and buffer containers | 0 |
+| Minimum / buffer CPU containers | 1 / 0 |
 | Idle scale-down window | 60 seconds |
 | Concurrent Modal inputs | 100, target 50 |
 | CPU request / maximum | 0.25 / 4 cores |
@@ -44,8 +44,7 @@ An open WebSocket is a Modal input. Visitor limits and finite session lifetimes
 are enforced inside the application, below the infrastructure input limit.
 Disconnected visitors have a short reconnect grace period; unused sessions and
 paid resources are cleaned up. ASGI lifespan shutdown closes all sessions and
-shared API services. Active sockets keep the container running; scale-to-zero
-applies after requests end and the idle window passes.
+shared API services. One API container stays warm to avoid API cold starts.
 
 The one-container limit is deliberate: visitor state and admission locks live in
 memory. Raising it requires shared session routing/state and a compatible durable
@@ -93,9 +92,13 @@ mutex. Repeated On while a component is active does not reserve again or renew
 its deadline. Off stops only that component; after confirmed cleanup it may be
 started again with a fresh lease, subject to the hourly and spending limits.
 
-The owner authorized $10 of additional available public-demo allowance. Keeping
-the $2.60 historical public reservations gives a $12.60 cumulative and UTC-day
-ceiling. The generic code fallback remains $1.20/day and $3 total if no explicit
+The owner initially authorized $10 of additional available public-demo allowance,
+giving a $12.60 cap with the earlier $2.60 reservations. The later authorization
+to prioritize startup speed over cost enables a bounded $25 cumulative/UTC-day
+application reservation cap, with all historical charges retained. Warm GPU/API
+containers are billed independently of this per-run ledger, including while idle;
+the application cap does not stop those infrastructure charges.
+The generic code fallback remains $1.20/day and $3 total if no explicit
 funding is supplied; that fallback cannot admit a $2.20 Director run.
 Reservations are non-refundable; changing the configured allowance does not
 refund reservations or erase start counts.
@@ -105,8 +108,8 @@ application estimates and admission limits, not a provider-enforced billing cap.
 The deployed backend uses these explicit nonsecret settings:
 
 ```dotenv
-TOUCHLINE_AI_DAILY_BUDGET_USD=12.60
-TOUCHLINE_AI_TOTAL_BUDGET_USD=12.60
+TOUCHLINE_AI_DAILY_BUDGET_USD=25.00
+TOUCHLINE_AI_TOTAL_BUDGET_USD=25.00
 MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT=110
 ```
 
@@ -164,8 +167,19 @@ WebSocket dependencies remain separate. The existing GPU deployment,
 `touchline.ml_inference.deployment.modal_app`, its model volume and worker
 contracts are unchanged. The ReplayWorker pool can scale to 40 containers for ten
 visitors, while each individual Director run remains bounded to four workers.
-All minimum/buffer container counts remain zero. Caption-only runs never create
-an inference bridge or GPU input.
+Eight replay GPU containers stay warm for two simultaneous visitors; overflow
+containers can remain idle for up to 300 seconds. L4 is preferred with T4 as
+fallback. There is no additional GPU buffer floor. Other worker pools retain
+their existing zero minimums. Provider/account capacity can still restrict scale.
+Caption-only runs never create an inference bridge or GPU input.
+
+Each warm replay container loads and warms YOLO, then preloads and validates the
+exact selected temporal GRU before accepting a session. No synthetic prediction
+is used as evidence. Per-visitor readers, feature caches and playback permits stay
+independent. Private-source authorization overlaps up to four read-only S3 HEAD
+checks; fresh identity validation, credential-bound signing, ordered publication
+and cleanup remain enforced. Registry metrics record counts and elapsed times,
+without source keys or signed URLs.
 
 The inference deployment allows T4/L4 capacity fallback while retaining the
 frozen selected model, seven source readers, raw `(75,215)` feature windows and
