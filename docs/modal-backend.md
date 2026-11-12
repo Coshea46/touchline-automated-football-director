@@ -135,6 +135,10 @@ ready playback report; neither construction nor hello alone starts a GPU. An
 explicit Off before media readiness cancels that startup intent. Reconnects do
 not silently grant another run. A configured policy and applicable credentials
 are required before either component can start paid work independently.
+The default startup counts as one Director start. Existing `ai_*` snapshot
+fields describe only the Director; caption intent, status and deadline remain
+under `captions`. Admission errors identify their `feature`, so a caption limit
+cannot switch the Director off or change its reservation.
 Never put permanent provider keys or the private inference token in frontend
 environment variables. The separate $5 deployment-verification allowance is not
 the website's daily admission limit.
@@ -189,6 +193,22 @@ REACT_APP_INDEPENDENT_SESSIONS=true
 the local shared-session backend uses its existing protocol. These frontend
 settings contain no provider credentials. Backend origin admission and S3 CORS
 must include the exact frontend origin.
+
+The independent twenty-minute policy was deployed on 12 November 2026 after
+1,035 backend tests, 239 frontend tests, production builds and installed-wheel
+checks passed. Provider-free tests cover parallel visitors, independent controls,
+deadline expiry, immediate restart after confirmed cleanup, ten-start rolling
+limits, budget races and stale-socket ownership during delayed admission. The
+public rollout check confirmed two distinct zero-time visitors, default-on
+Director intent, captions initially off and both 1200-second limits. It canceled
+startup before sending playback, made no paid enable request and closed both
+sockets. HTTP health, standings, news and production-origin CORS passed. A
+committed-ledger audit still showed four closed reservations totaling $2.60,
+leaving the new $10 available; no new GPU input ran for this verification.
+
+The new controls and twenty-minute expiry have not been rechecked with paid AI.
+The earlier live evidence below used the former two-minute policy and retains
+its sustained seven-source scoring limitation.
 
 The Vercel frontend and CPU backend are deployed. Verification on 12 November
 2026 passed HTTP health/API checks, all seven private fixture bindings, signed
