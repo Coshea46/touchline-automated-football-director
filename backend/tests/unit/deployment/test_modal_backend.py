@@ -74,6 +74,7 @@ def load_module(monkeypatch, *, local=True):
     monkeypatch.delenv("MATCHPULSE_BACKEND_SECRET_NAME", raising=False)
     monkeypatch.delenv("MATCHPULSE_MODAL_WS_TOKEN", raising=False)
     monkeypatch.delenv("MATCHPULSE_REPLAY_WS_TOKEN", raising=False)
+    monkeypatch.delenv("TOUCHLINE_ADMISSION_STORE", raising=False)
     path = Path(touchline.__file__).parent / "deployment" / "modal_backend.py"
     specification = importlib.util.spec_from_file_location("offline_cpu_deployment", path)
     module = importlib.util.module_from_spec(specification)
@@ -166,4 +167,44 @@ def test_asgi_factory_reloads_state_and_maps_only_missing_server_token(monkeypat
 def test_remote_import_does_not_require_local_checkout_build_inputs(monkeypatch):
     module = load_module(monkeypatch, local=False)
     assert [name for name, _, _ in module.image.calls] == ["debian_slim"]
+    assert module.state_volume.events == []
+
+
+def test_dynamo_factory_uses_explicit_store_without_reloading_or_committing_legacy_volume(monkeypatch):
+    module = load_module(monkeypatch)
+    monkeypatch.setenv("TOUCHLINE_ADMISSION_STORE", "dynamodb")
+    monkeypatch.setenv("TOUCHLINE_ADMISSION_DYNAMODB_TABLE", "offline-admission")
+    captured = {}
+    admission_module = ModuleType("touchline.hosted.dynamo_admission")
+    app_module = ModuleType("touchline.hosted.app")
+    class Policy:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+    admission_module.DynamoAdmissionPolicy = Policy
+    app_module.create_app = lambda **kwargs: kwargs["admission"]
+    monkeypatch.setitem(sys.modules, "touchline.hosted.dynamo_admission", admission_module)
+    monkeypatch.setitem(sys.modules, "touchline.hosted.app", app_module)
+    def forbidden():
+        raise AssertionError("Dynamo mode touched the legacy volume")
+    module.state_volume.reload = module.state_volume.commit = forbidden
+    assert isinstance(module.public_backend(), Policy)
+    assert captured == {"env": module.os.environ}
+    assert module.state_volume.events == []
+
+
+@pytest.mark.parametrize("store", ["", "DynamoDB", "redis", "PRIVATE_INVALID_STORE"])
+def test_invalid_admission_store_fails_static_without_fallback_or_state_access(monkeypatch, store):
+    module = load_module(monkeypatch)
+    monkeypatch.setenv("TOUCHLINE_ADMISSION_STORE", store)
+    with pytest.raises(ValueError, match="^invalid_admission_store$"):
+        module.public_backend()
+    assert module.state_volume.events == []
+
+
+def test_dynamo_configuration_error_never_falls_back_to_sqlite(monkeypatch):
+    module = load_module(monkeypatch)
+    monkeypatch.setenv("TOUCHLINE_ADMISSION_STORE", "dynamodb")
+    monkeypatch.delenv("TOUCHLINE_ADMISSION_DYNAMODB_TABLE", raising=False)
+    with pytest.raises(ValueError, match="^invalid_admission_table$"):
+        module.public_backend()
     assert module.state_volume.events == []

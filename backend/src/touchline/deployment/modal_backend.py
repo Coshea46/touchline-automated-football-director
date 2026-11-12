@@ -36,8 +36,11 @@ image = (build_backend_image(modal, BACKEND_ROOT) if modal.is_local() else
 def public_backend():
     # The SDK requires a synchronous, nullary ASGI factory. The returned app
     # handles requests asynchronously and owns its lifespan/session cleanup.
-    from touchline.hosted.admission import AdmissionPolicy
     from touchline.hosted.app import create_app
+
+    admission_store = os.environ.get("TOUCHLINE_ADMISSION_STORE", "sqlite")
+    if admission_store not in ("sqlite", "dynamodb"):
+        raise ValueError("invalid_admission_store")
 
     # The existing inference app uses its own server-side token name. Reuse that
     # secret without redeploying workers or exposing its value to the browser.
@@ -46,9 +49,17 @@ def public_backend():
         if token:
             os.environ["MATCHPULSE_MODAL_WS_TOKEN"] = token
 
-    # Load the durable admission state before constructing the policy. Its commit
-    # callback persists every paid reservation before provider work may begin.
-    state_volume.reload()
-    policy = AdmissionPolicy(db_path=ADMISSION_DATABASE, commit=state_volume.commit,
-                             env=os.environ)
+    if admission_store == "dynamodb":
+        from touchline.hosted.dynamo_admission import DynamoAdmissionPolicy
+
+        # The ASGI lifespan warms its ready-marker/salt before requests. A
+        # Dynamo failure never falls back to the stale filesystem ledger.
+        policy = DynamoAdmissionPolicy(env=os.environ)
+    else:
+        from touchline.hosted.admission import AdmissionPolicy
+
+        # Only SQLite mode loads/commits the mounted legacy state volume.
+        state_volume.reload()
+        policy = AdmissionPolicy(db_path=ADMISSION_DATABASE, commit=state_volume.commit,
+                                 env=os.environ)
     return create_app(admission=policy)

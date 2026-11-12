@@ -24,6 +24,14 @@ def public_code(code):
 
 
 @dataclass
+class PendingStart:
+    connection: object = field(repr=False)
+    epoch: int
+    deferred: bool = False
+    task: object = field(default=None, repr=False)
+
+
+@dataclass
 class Visitor:
     session: object
     token_hash: bytes = field(repr=False)
@@ -48,6 +56,9 @@ class Visitor:
     closing: bool = False
     caption_service: object = None
     caption_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    feature_epochs: dict = field(default_factory=lambda: {"director": 0, "captions": 0}, repr=False)
+    pending_starts: dict = field(default_factory=dict, repr=False)
+    startup_phase_timings: dict = field(default_factory=dict)
 
 
 def _digest(token):
@@ -73,10 +84,18 @@ class SessionManager:
         result = {**payload, "session_expires_at": visitor.expires_at,
             "ai_limit_seconds": 1200, "ai_remaining_seconds": remaining,
             "ai_active": visitor.ai_active, "ai_reason": visitor.ai_reason,
-            "controls_enabled": visitor.connection is not None}
+            "controls_enabled": visitor.connection is not None,
+            "startup_phase_timings": dict(visitor.startup_phase_timings)}
         if not visitor.ai_active and visitor.session._prepared_config is not None:
             result.update(auto_can_start=visitor.ai_cleanup_confirmed,
                           auto_start_reason="available" if visitor.ai_cleanup_confirmed else "stopping")
+        pending = visitor.pending_starts.get("director")
+        if pending is not None and not pending.task.done() and not visitor.ai_active:
+            current = self._start_current(visitor, pending.connection, "director", pending)
+            result.update(auto_starting=current, auto_can_start=False,
+                          auto_start_reason="starting" if current else "stopping")
+            if current:
+                result["auto_requested"] = True
         return result
 
     def _publish(self, visitor, payload):
@@ -123,11 +142,16 @@ class SessionManager:
                 self._creations.add(creation)
             session = None
             try:
+                started = time.monotonic()
                 admitted_peer = await self.admission.admit_new(peer)
+                admission_seconds = time.monotonic() - started
                 session_id, token = uuid.uuid4().hex, secrets.token_urlsafe(32)
+                started = time.monotonic()
                 created = self.factory(session_id, lambda: self._guard(session_id))
                 session = await created if inspect.isawaitable(created) else created
                 visitor = Visitor(session, _digest(token), admitted_peer, self.now() + self.ttl)
+                visitor.startup_phase_timings.update(creation_admission_seconds=admission_seconds,
+                    factory_source_seconds=time.monotonic() - started)
                 session.publish = lambda payload: self._publish(visitor, payload)
                 async with self._lock:
                     if self._closed:
@@ -165,7 +189,7 @@ class SessionManager:
     def owns(self, visitor, connection):
         return visitor.connection is connection and not visitor.closing
 
-    async def receive(self, visitor, connection, message):
+    async def receive(self, visitor, connection, message, *, defer_paid_start=False):
         if not self.owns(visitor, connection):
             raise SessionDenied("session_replaced")
         if self._expired(visitor):
@@ -187,7 +211,8 @@ class SessionManager:
             if kind == "auto":
                 visitor.startup_pending = False
             if message["enabled"]:
-                return await self._start_feature(visitor, connection, component)
+                return await self._request_start(visitor, connection, component, defer_paid_start)
+            self._invalidate_start(visitor, component)
             error = visitor.session.receive(connection.client_id, message)
             if component == "director":
                 self.finish_director(visitor, "viewer_disabled")
@@ -199,9 +224,65 @@ class SessionManager:
             if (error is None and visitor.startup_pending and visitor.session.playing
                     and not visitor.session.stalled and not visitor.session._controller_report_pending):
                 visitor.startup_pending = False
-                return await self._start_feature(visitor, connection, "director")
+                return await self._request_start(visitor, connection, "director", defer_paid_start)
             return error
         return visitor.session.receive(connection.client_id, message)
+
+    def _invalidate_start(self, visitor, component):
+        visitor.feature_epochs[component] += 1
+
+    def _start_current(self, visitor, connection, component, pending):
+        return (not self._closed and self.owns(visitor, connection) and not self._expired(visitor)
+                and visitor.feature_epochs[component] == pending.epoch)
+
+    def _stale_start(self, visitor, connection, component, pending):
+        """Keep direct callers' ownership errors, without changing a later intent."""
+        if self._expired(visitor):
+            self._schedule_close(visitor)
+            raise SessionDenied("session_expired")
+        if not self.owns(visitor, connection):
+            raise SessionDenied("session_replaced")
+        return not self._start_current(visitor, connection, component, pending)
+
+    async def _request_start(self, visitor, connection, component, deferred):
+        pending = visitor.pending_starts.get(component)
+        if pending is not None and not pending.task.done():
+            if not self._start_current(visitor, connection, component, pending):
+                # A committed reservation must drain before another run can
+                # start. Do not revoke the other feature or overwrite Off.
+                return {**visitor.session._error("ai_busy"), "feature": component}
+            pending.deferred |= deferred
+        else:
+            pending = PendingStart(connection, visitor.feature_epochs[component], deferred)
+            visitor.pending_starts[component] = pending
+            pending.task = self._track(asyncio.create_task(
+                self._run_start(visitor, connection, component, pending)))
+            visitor.session._publish_session()
+        if deferred:
+            return None
+        # Reader cancellation, Off and capability replacement cannot abandon
+        # a native durable commit that may already have charged its permit.
+        return await asyncio.shield(pending.task)
+
+    async def _run_start(self, visitor, connection, component, pending):
+        error = None
+        try:
+            error = await self._start_feature(visitor, connection, component, pending)
+        except SessionDenied:
+            if not pending.deferred:
+                raise
+        except Exception:
+            if not pending.deferred:
+                raise
+            if self._start_current(visitor, connection, component, pending):
+                error = self._feature_error(visitor, component, "server_unavailable")
+        finally:
+            if visitor.pending_starts.get(component) is pending:
+                visitor.pending_starts.pop(component)
+            visitor.session._publish_session()
+        if error and pending.deferred and self._start_current(visitor, connection, component, pending):
+            connection.queue(error)
+        return error
 
     def _feature_error(self, visitor, component, code, retry_after=None):
         session = visitor.session
@@ -217,13 +298,15 @@ class SessionManager:
             error["retry_after"] = max(0, int(retry_after))
         return error
 
-    async def _start_feature(self, visitor, connection, component):
+    async def _start_feature(self, visitor, connection, component, pending):
+        if self._stale_start(visitor, connection, component, pending):
+            return None
         session = visitor.session
         director = component == "director"
         active = visitor.ai_active if director else visitor.captions_active
         deadline = visitor.ai_deadline if director else visitor.captions_deadline
         if active and self.now() >= deadline:
-            (self.finish_director if director else self.finish_captions)(visitor, "ai_finished")
+            (self.finish_director if director else self.finish_captions)(visitor, "ai_finished", invalidate=False)
             return self._feature_error(visitor, component, "ai_busy")
         if not active:
             confirmed = visitor.ai_cleanup_confirmed if director else visitor.captions_cleanup_confirmed
@@ -233,17 +316,31 @@ class SessionManager:
                 return self._feature_error(visitor, component, "auto_unavailable")
             if not director and session.caption_worker is None:
                 return self._feature_error(visitor, component, "captions_unavailable")
+            started = time.monotonic()
             try:
                 lease = await self.admission.acquire_ai(session.session_id, visitor.peer, component=component)
             except Exception as exc:
-                if not self.owns(visitor, connection) or self._expired(visitor):
-                    raise SessionDenied("session_expired" if self._expired(visitor) else "session_replaced") from None
+                if self._stale_start(visitor, connection, component, pending):
+                    return None
+                visitor.startup_phase_timings[f"{component}_admission_seconds"] = time.monotonic() - started
                 code = public_code(getattr(exc, "code", None))
                 if code not in {"ai_busy", "budget_exhausted", "rate_limited", "ai_finished", "server_unavailable"}:
                     raise
                 return self._feature_error(visitor, component, code, getattr(exc, "retry_after", None))
+            if not self._start_current(visitor, connection, component, pending):
+                # No provider or session state has been touched by this grant.
+                # Release only its component, never the replacement's permit.
+                await self._release_unused(visitor, component, lease["permit_id"])
+                self._stale_start(visitor, connection, component, pending)
+                return None
+            visitor.startup_phase_timings[f"{component}_admission_seconds"] = time.monotonic() - started
             deadline = min(self.now() + min(1200, lease["duration_seconds"]),
                            lease.get("expires_at", float("inf")))
+            if self.now() >= deadline:
+                await self._release_unused(visitor, component, lease["permit_id"])
+                if self._stale_start(visitor, connection, component, pending):
+                    return None
+                return self._feature_error(visitor, component, "ai_finished")
             if director:
                 visitor.ai_permit = lease["permit_id"]
                 visitor.ai_active, visitor.ai_consumed = True, True
@@ -251,15 +348,6 @@ class SessionManager:
             else:
                 visitor.captions_permit, visitor.captions_active = lease["permit_id"], True
                 visitor.captions_deadline = deadline
-            expired = self._expired(visitor)
-            if not self.owns(visitor, connection) or expired:
-                (self.finish_director if director else self.finish_captions)(visitor, "viewer_disconnected")
-                if expired:
-                    self._schedule_close(visitor)
-                raise SessionDenied("session_expired" if expired else "session_replaced")
-            if self.now() >= deadline:
-                (self.finish_director if director else self.finish_captions)(visitor, "ai_finished")
-                return self._feature_error(visitor, component, "ai_finished")
             # A run started late in a replay still receives its full allowance.
             visitor.expires_at = max(visitor.expires_at, deadline + self.grace)
             try:
@@ -269,17 +357,34 @@ class SessionManager:
                     session._caption_deadline = deadline
                     session.caption_worker.start()
             except Exception:
-                (self.finish_director if director else self.finish_captions)(visitor, "start_failed")
+                (self.finish_director if director else self.finish_captions)(visitor, "start_failed", invalidate=False)
                 return self._feature_error(visitor, component, "server_unavailable")
         message = {"type": "auto" if director else "captions", "session_id": session.session_id, "enabled": True}
         error = session.receive(connection.client_id, message)
         if error:
-            (self.finish_director if director else self.finish_captions)(visitor, "start_failed")
+            (self.finish_director if director else self.finish_captions)(visitor, "start_failed", invalidate=False)
             return {**error, "feature": component}
         return None
 
-    def finish_director(self, visitor, reason):
+    async def _release_unused(self, visitor, component, permit):
+        try:
+            await self.admission.release_ai(permit, confirmed=True)
+        except BaseException:
+            # An unconfirmed financial close fences this component. It never
+            # grants permission to start a provider or disables the other one.
+            if component == "director":
+                visitor.ai_cleanup_confirmed = False
+            else:
+                visitor.captions_cleanup_confirmed = False
+            raise
+
+    def finish_director(self, visitor, reason, *, invalidate=True):
+        if invalidate:
+            self._invalidate_start(visitor, "director")
+        visitor.startup_pending = False
         if not visitor.ai_active:
+            visitor.session.director.set_auto(False)
+            visitor.session._publish_session()
             return visitor.stop_task
         visitor.ai_active, visitor.ai_reason = False, "stopping"
         visitor.ai_cleanup_confirmed = False
@@ -289,7 +394,7 @@ class SessionManager:
         session.director.set_auto(False)
         permit = visitor.ai_permit
         visitor.stop_task = self._track(asyncio.create_task(self._stop_director(visitor, permit, reason)))
-        self._publish(visitor, session.snapshot())
+        session._publish_session()
         return visitor.stop_task
 
     async def _stop_director(self, visitor, permit, reason):
@@ -302,8 +407,11 @@ class SessionManager:
             visitor.ai_reason = "awaiting_start" if confirmed else "ai_busy"
             visitor.session._publish_session()
 
-    def finish_captions(self, visitor, reason):
+    def finish_captions(self, visitor, reason, *, invalidate=True):
+        if invalidate:
+            self._invalidate_start(visitor, "captions")
         if not visitor.captions_active:
+            visitor.session._publish_session()
             return visitor.captions_stop_task
         visitor.captions_active, visitor.captions_cleanup_confirmed = False, False
         session = visitor.session
@@ -311,7 +419,7 @@ class SessionManager:
         session._caption_revoke(reason, status="disabled" if reason == "viewer_disabled" else "stopped")
         visitor.captions_stop_task = self._track(asyncio.create_task(
             self._stop_captions(visitor, visitor.captions_permit, session.caption_worker)))
-        self._publish(visitor, session.snapshot())
+        session._publish_session()
         return visitor.captions_stop_task
 
     async def _stop_captions(self, visitor, permit, worker):
@@ -387,6 +495,8 @@ class SessionManager:
                 if stop is not None:
                     await asyncio.shield(stop)
             finally:
+                pending = tuple(start.task for start in visitor.pending_starts.values())
+                await asyncio.gather(*(asyncio.shield(task) for task in pending), return_exceptions=True)
                 await visitor.session.close()
 
     async def sweep(self):

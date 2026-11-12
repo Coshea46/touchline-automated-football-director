@@ -138,6 +138,19 @@ class HostedApplication:
             event = await receive()
             if event["type"] == "lifespan.startup":
                 await self._warm_source_access()
+                warm_admission = getattr(self.admission, "warm", None)
+                if warm_admission is not None:
+                    try:
+                        await warm_admission()
+                    except Exception:
+                        # A paid public service must not accept traffic before
+                        # its durable financial store is ready. No SDK detail
+                        # or credential may reach the ASGI failure message.
+                        with suppress(Exception):
+                            await self.close()
+                        await send({"type": "lifespan.startup.failed",
+                                    "message": "Admission initialization unavailable"})
+                        return
                 self._ensure_sweeper()
                 await send({"type": "lifespan.startup.complete"})
             elif event["type"] == "lifespan.shutdown":
@@ -219,7 +232,7 @@ class HostedApplication:
                     message = await self._message(receive)
                     if message is None:
                         return
-                    error = await self.sessions.receive(visitor, socket, message)
+                    error = await self.sessions.receive(visitor, socket, message, defer_paid_start=True)
                     if error:
                         socket.queue(error)
 

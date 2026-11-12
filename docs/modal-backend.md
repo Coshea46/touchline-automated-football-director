@@ -69,7 +69,9 @@ The deployment references existing resources:
 - Existing Modal Secret `matchpulse-inference-replay-auth` supplies the private
   inference worker authentication value.
 - Modal Volume `touchline-backend-state` mounts at `/app/state`.
-- Admission state is stored in `/app/state/admission.sqlite3`.
+- SQLite admission state is stored in `/app/state/admission.sqlite3` by default.
+- Explicit Dynamo mode uses an existing table named by
+  `TOUCHLINE_ADMISSION_DYNAMODB_TABLE`; it performs no legacy-volume I/O.
 
 The references do not create either resource. Provision them explicitly before
 deployment. `MATCHPULSE_BACKEND_SECRET_NAME` can select another existing secret
@@ -82,11 +84,17 @@ backend token takes precedence. The worker WebSocket endpoint belongs in
 `MATCHPULSE_MODAL_WS_URL` in backend configuration. Neither value is returned to
 the frontend, and reusing the secret does not redeploy the GPU application.
 
-At container startup the factory reloads the state volume, then constructs
+In the default `TOUCHLINE_ADMISSION_STORE=sqlite` mode, the factory reloads the state volume, then constructs
 `AdmissionPolicy` with its persistent database and the volume's commit callback.
 The policy must commit a paid reservation before permitting provider work; a
 filesystem write alone is insufficient for a volume-backed cold restart. Its
 limits and conservative handling of uncertain cleanup apply across visitors.
+`TOUCHLINE_ADMISSION_STORE=dynamodb` instead selects atomic DynamoDB transactions,
+removing volume commits from the visitor admission path. It requires an audited
+migration of the complete existing ledger and a ready-marker check at startup;
+it never silently falls back to SQLite. See the
+[DynamoDB schema and migration procedure](admission-dynamodb.md) before selecting
+that mode. No funding or historical amounts change when switching stores.
 Director and captions have independent 1200-second leases and controls. Director
 starts reserve $2.60 for up to four T4/L4 workers, including bounded startup and
 the GPU's 15% regional placement premium. Historical $2.20 reservations retain

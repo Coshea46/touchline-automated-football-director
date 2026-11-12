@@ -205,10 +205,11 @@ def test_delayed_denial_from_replaced_socket_cannot_mutate_new_owner_director_in
             await entered.wait()
             await manager.attach({"type": "hello", "session_id": auth["session_id"],
                 "resume_token": auth["resume_token"]}, "peer", new)
-            assert await toggle(manager, visitor, new, "auto", True) is None
+            busy = await toggle(manager, visitor, new, "auto", True)
+            assert busy["code"] == "ai_busy" and busy["feature"] == "director"
             expected = (visitor.session.director.auto_enabled, visitor.ai_active,
                         visitor.ai_reason, visitor.ai_permit)
-            assert expected[:3] == (True, True, "active")
+            assert expected[:2] == (False, False)
             release.set()
             with pytest.raises(SessionDenied, match="session_replaced"):
                 await pending
@@ -216,6 +217,8 @@ def test_delayed_denial_from_replaced_socket_cannot_mutate_new_owner_director_in
             assert (visitor.session.director.auto_enabled, visitor.ai_active,
                     visitor.ai_reason, visitor.ai_permit) == expected
             assert admission.released == []
+            assert await toggle(manager, visitor, new, "auto", True) is None
+            assert visitor.ai_active and visitor.session.director.auto_enabled
             assert len(admission.acquired) == 1
         finally:
             release.set()
@@ -254,8 +257,8 @@ def test_delayed_success_from_replaced_socket_retires_only_its_director_permit_a
             release.set()
             with pytest.raises(SessionDenied, match="session_replaced"):
                 await pending
-            await visitor.stop_task
             assert visitor.connection is new and not visitor.ai_active
+            assert visitor.stop_task is None and visitor.session.bridge is None
             assert visitor.captions_active and visitor.session._caption_enabled
             assert visitor.session.caption_worker is worker
             assert (visitor.session._caption_deadline, visitor.session._caption_generation) == (deadline, generation)
@@ -320,9 +323,9 @@ def test_slow_durable_admission_cannot_authorize_after_visitor_or_original_lease
                     await manager.receive(visitor, connection, message)
             else:
                 assert (await manager.receive(visitor, connection, message))["code"] == expected
-            assert visitor.ai_consumed and not visitor.ai_active
+            assert not visitor.ai_consumed and not visitor.ai_active
             assert not visitor.session._caption_enabled and visitor.session.bridge is None
-            await visitor.stop_task
+            assert visitor.stop_task is None and not factory.bridges[0].calls
             assert admission.released == [("slow-permit", True)]
         finally:
             await manager.close()
