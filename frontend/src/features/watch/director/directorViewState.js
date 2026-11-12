@@ -1,5 +1,5 @@
 export default function directorViewState({ connection, sessionState, backendError, autoSwitch,
-  holdUntil, director, uiNow, serverSkew, feeds }) {
+  holdUntil, director, uiNow, serverSkew, feeds, independent = false }) {
   const autoAvailable = connection === 'connected' && Boolean(sessionState)
     && ['real', 'features_mock'].includes(sessionState.mode)
     && (sessionState.auto_available ?? ['running', 'degraded', 'paused'].includes(sessionState.state));
@@ -18,25 +18,36 @@ export default function directorViewState({ connection, sessionState, backendErr
     source_ended: 'The replay has ended.',
     not_prepared: 'Monitoring is not enabled on this backend.',
     closing: 'The backend is shutting down.',
+    ai_busy: 'Auto Director is busy with another viewer. You can keep choosing matches.',
+    rate_limited: 'The AI demo is limited right now. You can keep choosing matches.',
+    ai_finished: 'Your AI demo has ended. Manual viewing is still available.',
+    awaiting_start: 'Auto Director is off. Start your bounded AI demo when you are ready.',
+    server_unavailable: 'The AI demo is unavailable right now. You can keep choosing matches.',
   };
+  const admissionReason = independent && ['ai_busy', 'budget_exhausted', 'rate_limited', 'ai_finished', 'server_unavailable'].includes(sessionState?.ai_reason)
+    ? sessionState.ai_reason : null;
+  const startReason = admissionReason || sessionState?.auto_start_reason;
   const autoTitle = connection === 'connected' && sessionState?.controls_enabled === false
     ? sessionState.can_claim_control === true ? 'Another tab controls this replay. Use this tab to take control.'
       : 'Another tab controls this replay. Restart the backend to enable control handoff.'
-    : !autoToggleable ? startReasons[sessionState?.auto_start_reason] || 'Auto Director needs a ready monitoring session'
+    : !autoToggleable ? startReasons[startReason] || 'Auto Director needs a ready monitoring session'
+    : admissionReason ? startReasons[admissionReason]
     : autoCanStart ? 'Start a bounded real-model monitoring session'
     : autoStarting && autoSwitch ? 'Monitoring is starting. Click to turn automatic switching off.'
     : !autoSwitch ? 'Turn on automatic switching'
     : held ? 'Paused after your pick; resumes shortly. Click to turn off'
       : 'Automatically switching to the most interesting match. Click to turn off';
-  const waitingForStart = sessionState?.auto_can_start === true && sessionState?.auto_starting !== true;
+  const waitingForStart = (sessionState?.auto_can_start === true && sessionState?.auto_starting !== true)
+    || (independent && sessionState?.ai_active !== true && sessionState?.auto_starting !== true);
   const inferenceBuffering = connection === 'connected' && !waitingForStart
     && (sessionState?.auto_starting === true || ['waiting', 'starting'].includes(sessionState?.state));
   const inferenceLabel = backendError || (sessionState?.controls_enabled === false ? 'Viewing only'
     : inferenceBuffering ? 'Starting inference'
     : sessionState && connection !== 'connected' ? 'Inference offline'
+    : admissionReason ? startReasons[admissionReason]
     : autoCanStart ? 'Ready to start monitoring'
-    : startReasons[sessionState?.auto_start_reason] && ['disabled', 'stopped'].includes(sessionState?.state)
-      ? startReasons[sessionState.auto_start_reason]
+    : startReasons[startReason] && ['disabled', 'stopped'].includes(sessionState?.state)
+      ? startReasons[startReason]
     : sessionState?.state === 'disabled' ? 'Monitoring off'
     : sessionState?.state === 'stopped' ? 'Monitoring session ended'
     : sessionState?.state === 'ended' ? 'Replay ended'

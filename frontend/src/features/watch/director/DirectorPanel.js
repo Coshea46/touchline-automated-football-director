@@ -6,9 +6,9 @@ const MODE_HELP = { relaxed: 'Fewer automatic switches.', balanced: 'A balanced 
 export default function DirectorPanel({ director, mode, pendingMode, notice, onMode, enabled, available = true, modelVersion, held, canToggle, requested,
   holdUntil, now, monitoring, matchCount, monitoredCount, starting, connected, connection, canControl, scoreFresh,
   inferenceLabel, autoLabel, autoTitle, onToggle, canClaimControl = false, controlPending = false,
-  controlNotice, onClaimControl }) {
+  controlNotice, onClaimControl, visitor, sessionExpiresAt, aiActive, aiRemainingSeconds, aiReason }) {
   const cooldown = Math.max(0, Math.ceil((director?.auto_cooldown_until || 0) - now));
-  const connectionNotice = connection === 'connecting' ? 'Connecting to Auto Director…'
+  const connectionNotice = visitor?.enabled && visitor.notice ? visitor.notice : connection === 'connecting' ? 'Connecting to Auto Director…'
     : !connected ? 'Director offline. You can still choose a match.' : !canControl
       ? `Viewing only. Another tab controls this replay.${canClaimControl ? '' : ' Restart the backend to enable control handoff.'}` : '';
   return (
@@ -51,6 +51,16 @@ export default function DirectorPanel({ director, mode, pendingMode, notice, onM
       {controlNotice && <p className="mode-notice" role="status">{controlNotice}</p>}
       {pendingMode && <p className="mode-notice" role="status">Applying {DIRECTOR_MODES[pendingMode].label}…</p>}
       {notice && <p className="mode-notice" role="status">{notice}</p>}
+      {visitor?.enabled && <div className="director-notes">
+        {visitor.phase === 'waiting' && visitor.retryAt && <p role="status">Retrying in {Math.max(0, Math.ceil((visitor.retryAt - Date.now()) / 1000))}s.</p>}
+        {visitor.phase === 'ended' ? <button type="button" className="theme-toggle" onClick={visitor.startNewReplay}>Start new replay</button>
+          : <>
+            {Number.isFinite(sessionExpiresAt) && <p>Replay time remaining: {Math.max(0, Math.ceil((sessionExpiresAt - now) / 60))} min.</p>}
+            {aiActive && Number.isFinite(aiRemainingSeconds) ? <p>AI demo: {Math.max(0, Math.ceil(aiRemainingSeconds))}s remaining.</p>
+              : ['ai_finished', 'budget_exhausted'].includes(aiReason) ? <p>Your AI demo allowance has ended.</p>
+                : <p>One AI demo, up to 2 minutes. Turning Auto Off ends the allowance.</p>}
+          </>}
+      </div>}
     </aside>
   );
 }

@@ -1,8 +1,17 @@
 # Private recording access
 
 Touchline now defaults to signed reads from the owner's private bucket. This is
-application code and configuration; the checks below have not been run against
-AWS or Modal as part of this change.
+application code and configuration. A bounded Modal check on 12 November 2026
+verified the OIDC role exchange, all seven fixture bindings, independently signed
+HEAD requests, one-byte HTTP 206 GET ranges and CORS for both
+`http://localhost:3030` and `https://touchline-football-director.vercel.app`.
+A separate public browser check decoded all seven recordings, observed advancing
+native playback, preserved the seven video nodes through manual switches and
+resumed a nonzero replay after same-tab reload. The maximum switch clock deviation
+was 0.002 seconds. A separate bounded operator check verified complete real-model
+inference cohorts across all seven sources. Full-file checksums and the complete
+public browser Auto path remain unverified. See
+[hosted verification status](modal-backend.md#frontend-connection-and-verification).
 
 ## Configured resources
 
@@ -90,19 +99,20 @@ Verification receipts explicitly keep `full_file_checksum_verified=false`.
 
 ## Browser CORS
 
-The bucket setup instructions use these exact local origins:
+The configured CORS rule includes these exact origins:
 
 - `http://localhost:3000`
 - `http://127.0.0.1:3000`
 - `http://localhost:3030`
 - `http://127.0.0.1:3030`
+- `https://touchline-football-director.vercel.app`
 
-The intended settings permit `GET` and `HEAD`, allow request headers `*`, expose
+The settings permit `GET` and `HEAD`, allow request headers `*`, expose
 `ETag`, `Content-Length`, `Content-Range` and `Accept-Ranges`, and use a preflight
-cache age of 3600 seconds. These AWS settings have not been independently checked
-by this code change. Add the exact deployed HTTPS frontend origin when hosting is
-configured. CORS controls browser access to responses; it does not grant S3
-authorization or make the bucket public.
+cache age of 3600 seconds. The 12 November 2026 Modal OIDC probe passed CORS checks
+for the production origin across all seven recordings. The full rule is recorded
+in [`deployment/s3-cors.json`](deployment/s3-cors.json). CORS controls browser
+access to responses; it does not grant S3 authorization or make the bucket public.
 
 ## Explicit read checks
 
@@ -131,9 +141,12 @@ configured IAM trust; it does not require deploying the application:
 ```
 
 The Modal check performs the same small S3 reads. It starts no GPU inference or
-transcription. These commands are documented for explicit operator execution;
-neither was executed during implementation. Normal unit tests use fake STS/S3
-adapters and make no provider requests.
+transcription. Add `--origin https://touchline-football-director.vercel.app` to
+check the production origin. Both the local-origin and production-origin Modal
+checks passed on 12 November 2026. These commands check metadata/ranges/CORS;
+the separate public browser playback and bounded operator inference checks also
+passed. The complete public browser Auto path remains unverified. Normal unit
+tests use fake STS/S3 adapters and make no provider requests.
 
 Historical model-release and legacy equivalence commands retain their original
 public recording fixture. Use the storage commands above to check this private
@@ -147,7 +160,10 @@ screenshots and pasted diagnostics; share the sanitized JSON receipt instead.
 
 Private S3 objects require valid authorization, but a reachable backend can still
 distribute signed URLs to its viewers. Bucket privacy does not implement viewer
-authentication or decide who may control a replay. The application still has one
-shared in-memory session and one controlling viewer. Choose a controlled shared
-demo or a separate visitor-session design before public hosting, and apply the
-corresponding application access controls.
+authentication or decide who may control a replay. The public deployment gives
+each visitor an independent replay session, with all seven recordings starting
+at zero and a per-tab resume capability. A visitor's playback, selection and AI
+controls belong to that session. The public link remains subject to session,
+rate and paid-work admission limits; it does not require an account sign-in.
+See [the hosted backend](modal-backend.md) for those controls and the separate
+durable AI allowance. The local launcher retains its shared-session mode.

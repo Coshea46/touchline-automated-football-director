@@ -57,6 +57,7 @@ export default function useLiveCaptions({ session, feeds, focused, clock, media,
       && previous.match_id === context.match_id && previous.clock_epoch === context.clock_epoch;
     update({ ...previous, ...context, session_id: next.session_id, model: context?.model || LIVE_CAPTION_MODEL,
       status: context?.status || 'unavailable', available: context?.available === true,
+      reason: context?.reason ?? null,
       text: same && context.enabled && desired.current && ['listening', 'partial', 'committed', 'live', 'streaming', 'running'].includes(context.status) ? previous.text : '',
       source_key: same ? previous.source_key : undefined, source_identity: same ? previous.source_identity : undefined,
       state: same ? previous.state : null, receivedLocal: same ? previous.receivedLocal : null });
@@ -97,10 +98,15 @@ export default function useLiveCaptions({ session, feeds, focused, clock, media,
     if (pendingControl.current) pendingControl.current.sent = false;
     update({ ...valueRef.current, text: '', state: null, status: 'offline' });
   }, [update]);
+  const onControlRejected = useCallback((reason) => {
+    pendingControl.current = null;
+    desired.current = false; setEnabled(false);
+    update({ ...valueRef.current, text: '', state: null, status: 'unavailable', reason, enabled: false });
+  }, [update]);
   useEffect(() => {
     if (!value.text) return undefined;
     const timer = setTimeout(() => update({ ...valueRef.current, text: '', state: null }), 10000);
     return () => clearTimeout(timer);
   }, [value.text, value.receivedLocal, update]);
-  return { enabled, value, control, onSession, onMessage, onPlayback, onConnection };
+  return { enabled, value, control, onSession, onMessage, onPlayback, onConnection, onControlRejected };
 }

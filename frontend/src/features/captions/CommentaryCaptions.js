@@ -113,6 +113,7 @@ export default function CommentaryCaptions({ feed, mediaRef, live, enabled: cont
           title={isLive ? 'Caption preference. The status below shows whether live transcription is available.' : undefined}
           onClick={() => { setEnabled(!enabled); onToggle?.(!enabled); }}><span className="caption-switch" aria-hidden="true"><i /></span><span>{enabled ? 'On' : 'Off'}</span></button>
     </div>
+    {!enabled && isLive && live?.reason === 'ai_required' && <p className="caption-status" role="status">{liveCaptionStatus(live, connected, canControl)}</p>}
     {enabled && <>
       <div className="caption-panel">{caption}{!text && status && <p className="caption-status" role="status">{status}</p>}</div>
       {isLive && <p className="caption-provenance">Automatic captions by <a href="https://elevenlabs.io/" target="_blank" rel="noreferrer">ElevenLabs</a>. Draft text may change. Not human reviewed.</p>}

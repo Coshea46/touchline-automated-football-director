@@ -12,8 +12,11 @@ contracts.
 | `frontend/src/features/watch/` | Watch view with session, playback, audio, director and source modules |
 | `frontend/src/features/captions/`, `tables/`, `news/` | Caption rendering and supporting pages |
 | `frontend/src/shared/` | Backend connections, shared connection events, reusable UI and common styles |
-| `backend/src/touchline/replay/` | Source registry, shared session, clock permits and director policy |
+| `backend/src/touchline/replay/` | Source registry, replay session, clock permits and director policy |
 | `backend/src/touchline/api/` | HTTP and WebSocket transport, application routes and bounded state delivery |
+| `backend/src/touchline/hosted/` | Independent visitor sessions, capability/resume protocol and durable paid-work admission |
+| `backend/src/touchline/deployment/` | Single-container Modal CPU hosting and isolated caption image |
+| `backend/src/touchline/storage/` | Refreshable AWS credentials and expiring private S3 authorization |
 | `backend/src/touchline/ml_inference/` | Modal bridge, persistent workers, cached extraction and model scoring |
 | `backend/src/touchline/captions/` | Focused-match audio and the isolated ElevenLabs subprocess |
 | `backend/src/touchline/football_platform/` | Server-side football-data.org and Guardian requests |
@@ -57,11 +60,15 @@ import graph. The unreferenced earlier grid/focus screens have been removed.
 
 ## Session ownership and director policy
 
-There is one shared in-memory replay session per backend process and one
-controlling viewer. Other connected viewers can be viewing-only; they are not
-independent per-visitor replay sessions. Public hosting needs a deliberate choice
-between a controlled shared demo and a later independent-session design. Scaling
-CPU processes does not by itself establish independent sessions or shared state.
+The local launcher has one shared in-memory replay session per backend process
+and one controlling viewer; other connections can be viewing-only. The public
+Modal deployment instead creates an independent `ReplaySession` for each visitor,
+with all seven recordings starting at zero and a per-tab resume capability.
+The frontend must set `REACT_APP_INDEPENDENT_SESSIONS=true` to use that hosted
+hello/resume protocol. Session/rate limits and durable paid-work admission apply
+before provider work. Visitor state stays in one CPU container; scaling CPU
+processes alone does not establish session routing or shared state. See
+[hosted backend setup](modal-backend.md).
 
 `replay/session.py` remains the session owner. `config.py` validates session
 settings, `diagnostics.py` filters worker health, and `captions.py` and
@@ -97,7 +104,9 @@ Only the focused recording's audio is sent progressively from its actual
 playback position. Partial transcripts are replaced by committed text. Switching,
 pausing, seeking, buffering and disconnecting cancel or update the audio source;
 turning captions off stops paid audio. Permanent ElevenLabs and football-provider
-keys remain server-side. Caption and inference usage allowances are separate.
+keys remain server-side. Caption and inference usage accounting remain separate;
+the public deployment also requires a shared bounded admission reservation before
+either paid path can start.
 
 `captions/live/` separates the backend adapter, SDK connection, transcription
 engine, process entry point, progressive audio reader and event handling.
@@ -140,11 +149,20 @@ Current operations are grouped under `tools/cloud/`, `tools/validation/` and
 `tools/evaluation/`. `tools/support/` owns the shared helpers, and `tools/legacy/`
 retains the earlier explicit validation/browser workflows.
 
-The intended hosting remains Vercel for the React frontend, Modal for the CPU
-backend and existing GPU workers, the owner's S3 bucket for recordings, and
-ElevenLabs for captions. Source migration, public delivery configuration and
-public-demo session ownership are deployment work. Existing `MATCHPULSE_*`
-variables and `matchpulse` resource/runtime names remain compatibility identifiers.
+The public frontend is [hosted on Vercel](https://touchline-football-director.vercel.app)
+and uses [the Modal CPU backend](https://coshea46--touchline-backend.eu-west.modal.run).
+Existing Modal GPU workers, the owner's private S3 recordings and isolated
+ElevenLabs caption runtime retain their roles. Verification on 12 November 2026
+passed HTTP/S3 checks, seven-source browser decoding and manual switching with
+preserved nodes, nonzero reload resume, independent visitor WebSocket isolation
+and focused Scribe partial/committed delivery. A separate bounded operator check
+verified complete real-model inference cohorts across all seven sources and
+confirmed owned GPU stop/source cleanup. The complete public browser Auto path
+remains unverified. Cold provider queueing can exceed the 90-second worker
+connection timeout; uncertain cleanup fails closed pending operator reconciliation.
+See [hosted verification status](modal-backend.md#frontend-connection-and-verification).
+Existing `MATCHPULSE_*` variables and `matchpulse` resource/runtime names remain
+compatibility identifiers.
 
 See [inference](inference/README.md) for the worker contract and operational tools,
 and [the root README](../README.md) for model results, attribution and limitations.

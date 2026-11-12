@@ -13,3 +13,5 @@ build/
 dist/
 artifacts/
 coverage/
+.vercel
+.playwright-mcp/

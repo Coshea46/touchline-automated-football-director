@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import time
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 from touchline.replay.sources import SourceRegistry
 from touchline.config.local import load_local_environment
@@ -36,6 +37,9 @@ def verify_sources(registry=None, *, opener=urlopen, now=time.time, origin="http
                         and response.headers.get("Content-Range") == expected
                         and len(response.read(2)) == 1)
                     item["cors_ok"] = head_cors and response.headers.get("Access-Control-Allow-Origin") in (origin, "*")
+            except HTTPError as exc:
+                item["error"] = "source_http_error"
+                item["http_status"] = exc.code
             except Exception:
                 item["error"] = "source_read_check_failed"
             if source.expires_at is not None:

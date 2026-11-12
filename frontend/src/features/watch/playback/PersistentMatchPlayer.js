@@ -120,6 +120,7 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
       video.matchpulseReadyIdentity = identity;
       setLoading(false); setFailed(false);
       if (active()) {
+        clock.current.sample = sample;
         clock.current.available = true;
         clock.current.stalled = false;
         clock.current.ended = false;
@@ -296,6 +297,28 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
     return () => registerPlayer?.(cameraId, null);
   }, [cameraId, registerPlayer]);
 
+  // Apply an explicit seek before focus/playback synchronization can sample the
+  // outgoing native position (especially when starting a fresh visitor replay).
+  useLayoutEffect(() => {
+    if (!seekTo || appliedSeek.current === seekTo) return;
+    appliedSeek.current = seekTo;
+    const active = focused && (!focusedRef || focusedRef.current === feed.id);
+    runtime.current.pendingExternal = seekTo.time;
+    runtime.current.externalApplied = false;
+    runtime.current.needsAlignment = true;
+    runtime.current.ready = false;
+    ref.current.matchpulseReadySource = null;
+    ref.current.matchpulseReadyIdentity = null;
+    ref.current.dispatchEvent(new Event(SOURCE_LOAD_EVENT));
+    if (active) {
+      clock.current.stalled = true;
+      clock.current.available = false;
+      setLoading(true);
+      props.current.onPlayback?.();
+    }
+    actions.current?.sync({ external: seekTo.time });
+  }, [seekTo, focused, focusedRef, feed.id, clock]);
+
   useLayoutEffect(() => {
     const video = ref.current;
     const replayClock = clock.current;
@@ -340,26 +363,6 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
       actions.current?.pause();
     }
   }, [focused, focusedRef, feed.id, inferenceBuffering, audioAllowed, previewsPaused, watching, clock]);
-
-  useLayoutEffect(() => {
-    if (!seekTo || appliedSeek.current === seekTo) return;
-    appliedSeek.current = seekTo;
-    const active = focused && (!focusedRef || focusedRef.current === feed.id);
-    runtime.current.pendingExternal = seekTo.time;
-    runtime.current.externalApplied = false;
-    runtime.current.needsAlignment = true;
-    runtime.current.ready = false;
-    ref.current.matchpulseReadySource = null;
-    ref.current.matchpulseReadyIdentity = null;
-    ref.current.dispatchEvent(new Event(SOURCE_LOAD_EVENT));
-    if (active) {
-      clock.current.stalled = true;
-      clock.current.available = false;
-      setLoading(true);
-      props.current.onPlayback?.();
-    }
-    actions.current?.sync({ external: seekTo.time });
-  }, [seekTo, focused, focusedRef, feed.id, clock]);
 
   const select = (event) => {
     if (focused) return;

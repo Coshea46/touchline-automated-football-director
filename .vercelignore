@@ -1,0 +1,13 @@
+**/.env
+**/.env.*
+**/.venv*/**
+**/node_modules/**
+**/__pycache__/**
+**/artifacts/**
+**/build/**
+**/dist/**
+**/*.pyc
+backend/tests/**
+backend/src/touchline/ml_inference/**
+.agents/**
+.codex/**

@@ -23,17 +23,17 @@ image = (
 
 @app.function(image=image, cpu=0.25, memory=256, timeout=90,
               min_containers=0, max_containers=1)
-def inspect_private_sources():
+def inspect_private_sources(origin: str = "http://localhost:3030"):
     from touchline.tools.storage.verify_sources import verify_sources
 
-    return verify_sources()
+    return verify_sources(origin=origin)
 
 
 @app.local_entrypoint()
-def main(allow_read: bool = False):
+def main(allow_read: bool = False, origin: str = "http://localhost:3030"):
     if not allow_read:
         raise ValueError("Pass --allow-read to run the bounded CPU-only S3 check")
-    report = inspect_private_sources.remote()
+    report = inspect_private_sources.remote(origin)
     print(json.dumps(report, indent=2, allow_nan=False))
     if not report["passed"]:
         raise RuntimeError("Private source verification failed; see safe error codes above")

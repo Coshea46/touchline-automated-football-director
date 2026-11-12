@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from threading import Lock
+from urllib.parse import parse_qs, urlsplit
 
 from botocore import UNSIGNED
 from botocore.credentials import Credentials, ReadOnlyCredentials
@@ -11,6 +12,25 @@ from touchline.storage import S3Access, StorageAuthorizationError
 
 ROLE = "arn:aws:iam::709860105019:role/TouchlineVideoReader"
 BUCKET = "touchline-videos-709860105019-eu-west-2-an"
+
+
+def test_real_sdk_presigns_regional_host_without_redirect_or_network():
+    import boto3
+
+    def session_factory(**kwargs):
+        return boto3.Session(aws_access_key_id="OFFLINE_TEST_ACCESS",
+                             aws_secret_access_key="OFFLINE_TEST_SECRET", **kwargs)
+
+    access = S3Access({}, region="eu-west-2", session_factory=session_factory)
+    try:
+        for sign in (access.presign_get, access.presign_head):
+            parsed = urlsplit(sign(BUCKET, "match-1.mp4").url)
+            assert parsed.hostname == f"{BUCKET}.s3.eu-west-2.amazonaws.com"
+            assert parsed.path == "/match-1.mp4"
+            scope = parse_qs(parsed.query)["X-Amz-Credential"][0]
+            assert "/eu-west-2/s3/aws4_request" in scope
+    finally:
+        access.close()
 
 
 class Clock:

@@ -18,6 +18,31 @@ npm.cmd --prefix frontend run build
 
 The build output is `frontend/build/`. For Vercel, select `frontend` as the root directory, `npm run build` as the build command, and `build` as the output directory. The build requires the full repository checkout so its preparation script can read the canonical fixture catalogue.
 
+The deployed frontend is [Touchline](https://touchline-football-director.vercel.app).
+Its Vercel build uses these public settings:
+
+```dotenv
+REACT_APP_API_URL=https://coshea46--touchline-backend.eu-west.modal.run
+REACT_APP_WS_URL=wss://coshea46--touchline-backend.eu-west.modal.run/ws
+REACT_APP_INDEPENDENT_SESSIONS=true
+```
+
+The independent-session flag is required for the hosted backend's hello/resume
+protocol. Each visitor starts all seven recordings at zero and keeps a per-tab
+resume capability. Local shared-session launches retain their existing mode.
+See [hosted backend setup](../docs/modal-backend.md) for session and admission
+limits. Public verification on 12 November 2026 passed seven-source browser
+decoding, native clock advancement, all seven manual switches with preserved
+video nodes (maximum clock deviation 0.002 seconds), and nonzero same-tab reload
+resume. Backend WebSocket checks verified independent zero-start visitors and
+resume; focused Scribe delivered partial and committed events without persisting
+transcript text. A separate bounded operator check verified complete real-model
+inference cohorts across all seven sources and confirmed cleanup. The complete
+public browser Auto path remains unverified, and cold provider queueing can exceed
+the worker connection timeout. See
+[hosted verification status](../docs/modal-backend.md#frontend-connection-and-verification)
+for the separate playback, caption and model evidence.
+
 ## Source layout
 
 - `src/app/`: application shell, theme, navigation and the ordered stylesheet entry point.

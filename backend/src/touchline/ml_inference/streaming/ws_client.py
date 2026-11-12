@@ -2,9 +2,11 @@
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import os
+import re
 import time
 from contextlib import suppress
 from threading import Event, RLock, Thread
@@ -18,6 +20,7 @@ from touchline.ml_inference.streaming.client import ReplayClient
 from touchline.ml_inference.streaming.contract import MAX_GPU_WORKERS
 
 MAX_MESSAGE_BYTES = 512 * 1024
+logger = logging.getLogger(__name__)
 
 
 def _endpoint(value, allow_loopback):
@@ -77,6 +80,7 @@ class _SocketHandle:
         self._lock = RLock()
         self._loop = self._task = self._socket = None
         self._enabled, self._started, self._error_published = True, False, False
+        self._transport_phase, self._transport_started = 'connect', time.monotonic()
         self._sequence = 0
         self._thread = Thread(target=self._thread_main, daemon=True, name='replay-ws-' + spec.get('shard_id', '0'))
         self._thread.start()
@@ -180,9 +184,11 @@ class _SocketHandle:
                 ping_interval=10, ping_timeout=10, logger=wire_logger) as socket:
             with self._lock:
                 self._socket = socket
+            self._transport_phase = 'send_start'
             await asyncio.wait_for(socket.send(_encoded({'type': 'start', 'spec': self._spec})),
                                    timeout=self._owner.send_timeout)
             self._started = True
+            self._transport_phase = 'stream'
             sender, receiver = asyncio.create_task(self._sender(socket)), asyncio.create_task(self._receiver(socket))
             try:
                 done, _ = await asyncio.wait((sender, receiver), return_when=asyncio.FIRST_COMPLETED)
@@ -198,6 +204,25 @@ class _SocketHandle:
                 receiver.cancel()
                 await asyncio.gather(sender, receiver, return_exceptions=True)
 
+    def _log_transport_failure(self, exc):
+        """Bounded diagnostic labels only; never format the exception itself."""
+        error_class = type(exc).__name__
+        if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}', error_class) is None:
+            error_class = 'Exception'
+        try:
+            status = getattr(exc, 'status_code', None)
+            if status is None:
+                status = getattr(getattr(exc, 'response', None), 'status_code', None)
+        except Exception:  # A diagnostic property must not disrupt error publication.
+            status = None
+        status = int(status) if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None
+        phase = self._transport_phase
+        elapsed = max(0.0, time.monotonic() - self._transport_started)
+        correlation = hashlib.sha256(self._spec['session_id'].encode('utf-8')).hexdigest()
+        logger.warning('Replay WebSocket transport failed phase=%s elapsed_seconds=%.3f '
+                       'exception_class=%s http_status=%s session_sha256=%s',
+                       phase, elapsed, error_class, status, correlation)
+
     def _thread_main(self):
         async def run():
             with self._lock:
@@ -209,6 +234,7 @@ class _SocketHandle:
         except asyncio.CancelledError:
             pass  # Cancellation belongs to this owned socket/connect operation.
         except Exception as exc:  # noqa: BLE001 - publish only the class, never URL/header/exception text.
+            self._log_transport_failure(exc)
             try:
                 self._error(type(exc).__name__)
             except Exception:  # noqa: BLE001, S110 - a concurrently stopped local cache must not be resurrected.

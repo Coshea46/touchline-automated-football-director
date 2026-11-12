@@ -7,14 +7,17 @@ import useAudioOwnership from '../audio/useAudioOwnership';
 import usePlayerHandoff from '../playback/usePlayerHandoff';
 import useDirectorControls from '../director/useDirectorControls';
 import directorViewState from '../director/directorViewState';
+import useVisitorSession, { INDEPENDENT_SESSIONS } from './useVisitorSession';
 
 export const MANUAL_HOLD_MS = 30000;
 
-// The one Watch coordinator remains mounted while navigation only hides its view.
+// The Watch coordinator remains mounted while navigation only hides its view.
 export default function useWatchReplay(activePage) {
+  const visitor = useVisitorSession();
   const [feeds, setFeeds] = useState(FEEDS);
   const [sessionState, setSessionState] = useState(null);
   const [backendError, setBackendError] = useState('');
+  const [aiNotice, setAiNotice] = useState('');
   const [claimPending, setClaimPending] = useState(false);
   const [controlNotice, setControlNotice] = useState('');
   const [audioEnabled, setAudioEnabled] = useState(false);
@@ -22,7 +25,7 @@ export default function useWatchReplay(activePage) {
   const [uiNow, setUiNow] = useState(Date.now());
   const [focusedId, setFocusedId] = useState(FEEDS[0].id);
   const [previewsPaused, setPreviewsPaused] = useState(false);
-  const [autoSwitch, setAutoSwitch] = useState(true);
+  const [autoSwitch, setAutoSwitch] = useState(!INDEPENDENT_SESSIONS);
   const [holdUntil, setHoldUntil] = useState(0);
   const [seekTo, setSeekTo] = useState(null);
   const [announcement, setAnnouncement] = useState('');
@@ -44,6 +47,7 @@ export default function useWatchReplay(activePage) {
   const mainVideo = useRef(null);
   const audio = useAudioOwnership({ media: mainVideo, clock, sourceId: focusedId, enabled: audioEnabled });
   const requestOwnedAudio = audio.requestAudio;
+  const releaseOwnedAudio = audio.releaseAudio;
   const synced = useRef(false);
   const serverSkew = useRef(0);
   const { director, setDirector, pendingMode, setPendingMode, modeNotice, setModeNotice,
@@ -208,6 +212,7 @@ export default function useWatchReplay(activePage) {
       setFeeds(next.feeds);
       setSessionState(next);
       setBackendError('');
+      if (visitor.enabled && (next.ai_active === true || next.ai_reason === 'ai_finished')) setAiNotice('');
       const nextDirector = updateDirector(next.director, next.feeds);
       if (claimed && nextDirector) modePreference.current = nextDirector.mode;
       if (nextDirector && modeRequestSession.current !== next.session_id && next.controls_enabled !== false) {
@@ -219,6 +224,13 @@ export default function useWatchReplay(activePage) {
       if (!synced.current) {
         synced.current = true;
         if (clock.current.time <= 0.05 && next.playback.position > 0) {
+          if (visitor.enabled) {
+            // A reloaded tab holds the server's last factual clock unavailable
+            // until its native seek decodes; it never reports a zero-time rewind.
+            clock.current.time = next.playback.position;
+            clock.current.stalled = true;
+            clock.current.available = false;
+          }
           setSeekTo({ time: next.playback.position });
         }
       }
@@ -279,8 +291,19 @@ export default function useWatchReplay(activePage) {
       pendingModeRef.current = null;
       setPendingMode(null);
       setModeNotice('That mode could not be applied. The current settings are unchanged.');
+    } else if (visitor.enabled && message.type === 'error' && message.code === 'ai_required') {
+      captions.onControlRejected('ai_required');
+    } else if (visitor.enabled && message.type === 'error' && ['ai_busy', 'rate_limited', 'budget_exhausted', 'ai_finished', 'server_unavailable'].includes(message.code)) {
+      const notices = { ai_busy: 'Auto Director is busy with another viewer. You can keep choosing matches.',
+        rate_limited: 'The AI demo is limited right now. You can keep choosing matches.',
+        budget_exhausted: 'The AI demo allowance has been used. Manual viewing is still available.',
+        ai_finished: 'Your AI demo has ended. You can keep choosing matches.',
+        server_unavailable: 'The AI demo is unavailable right now. You can keep choosing matches.' };
+      setAiNotice(notices[message.code]);
+      autoRef.current = false; setAutoSwitch(false);
+      dirtyControls.current.auto = false;
     }
-  }, undefined, send);
+  }, undefined, send, visitor.socketOptions);
 
   useEffect(() => {
     if (connection !== 'connected') {
@@ -296,6 +319,31 @@ export default function useWatchReplay(activePage) {
     } else setAudioEnabled(roleConfirmed.current && session.current?.controls_enabled === true);
     captionConnection(connection === 'connected');
   }, [connection, captionConnection, modeRequestSession]);
+
+  useEffect(() => {
+    if (!visitor.enabled || visitor.phase !== 'ended') return;
+    clock.current.playing = false; clock.current.stalled = true; clock.current.available = false;
+    autoRef.current = false; setAutoSwitch(false); setPreviewsPaused(true);
+    pendingSelection.current = null; pendingAck.current = null;
+    releaseOwnedAudio(); setAudioEnabled(false);
+  }, [visitor.enabled, visitor.phase, releaseOwnedAudio]);
+
+  const startNewReplay = () => {
+    // Only this explicit action replaces the capability and resets the timeline.
+    session.current = null; synced.current = false;
+    delete clock.current.sample;
+    Object.assign(clock.current, { time: 0, playing: true, rate: 1, stalled: true, available: false, ended: false });
+    autoRef.current = false; holdRef.current = 0;
+    dirtyControls.current = { auto: false, select: false };
+    pendingSelection.current = null; pendingAck.current = null; latestRecommendation.current = null;
+    pendingClaim.current = null; roleConfirmed.current = false; unavailable.current.clear();
+    directorRef.current = null; pendingModeRef.current = null; modeRequestSession.current = null;
+    setSessionState(null); setDirector(null); setPendingMode(null); setModeNotice('');
+    setHoldUntil(0); setClaimPending(false); setControlNotice(''); setBackendError(''); setAiNotice('');
+    setAutoSwitch(false); setAudioEnabled(false); setPreviewsPaused(false);
+    setSeekTo({ time: 0 }); setFocusedId(feedsRef.current[0].id);
+    visitor.restart();
+  };
 
   const toggleAuto = () => {
     if (!autoToggleable) return;
@@ -322,11 +370,13 @@ export default function useWatchReplay(activePage) {
   };
 
   const view = directorViewState({ connection, sessionState, backendError, autoSwitch, holdUntil,
-    director, uiNow, serverSkew: serverSkew.current, feeds });
+    director, uiNow, serverSkew: serverSkew.current, feeds, independent: visitor.enabled });
   const { autoCanStart, autoToggleable } = view;
 
   return { feeds, focused, focusedRef, headingRef, registerPlayer, clock, seekTo, reportPlayback, mainVideo,
-    audio, audioEnabled, claimPending, claimControl, session, sessionState, director, pendingMode, modeNotice,
+    audio, audioEnabled, claimPending, claimControl, session, sessionState, director, pendingMode, modeNotice: modeNotice || aiNotice,
     requestMode, controlNotice, holdUntil, connection, captions, autoSwitch, previewsPaused, setPreviewsPaused,
-    pick, unavailable, finishRecommendation, pendingAck, toggleAuto, onPlayerKey, announcement, view };
+    pick, unavailable, finishRecommendation, pendingAck, toggleAuto, onPlayerKey, announcement, view,
+    visitor: { enabled: visitor.enabled, phase: visitor.phase, notice: visitor.notice, retryAt: visitor.retryAt,
+      expiresAt: visitor.expiresAt, startNewReplay } };
 }

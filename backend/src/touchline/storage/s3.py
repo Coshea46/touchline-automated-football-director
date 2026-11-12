@@ -100,6 +100,7 @@ class S3Access:
         from botocore.config import Config
 
         return Config(signature_version=UNSIGNED if unsigned else "s3v4",
+                      s3={"addressing_style": "virtual"},
                       connect_timeout=3, read_timeout=5,
                       retries={"max_attempts": 2})
 
@@ -167,6 +168,7 @@ class S3Access:
             if self._client is None:
                 try:
                     self._client = self._get_session().client("s3", region_name=self.region,
+                                                              endpoint_url=self._s3_endpoint(),
                                                               config=self._config())
                 except StorageAuthorizationError:
                     raise
@@ -190,6 +192,10 @@ class S3Access:
         except Exception:
             raise StorageAuthorizationError("aws_credentials_unavailable") from None
 
+    def _s3_endpoint(self):
+        suffix = "amazonaws.com.cn" if self.region.startswith("cn-") else "amazonaws.com"
+        return f"https://s3.{self.region}.{suffix}"
+
     def authorization_expiry(self):
         """Resolve/refresh credentials and return their actual expiration, if any."""
         return self._snapshot()[1]
@@ -211,7 +217,7 @@ class S3Access:
             # Freeze the exact generation used for this URL. A concurrent SDK
             # refresh cannot make its reported expiry belong to another token.
             signing_client = self._get_session().client(
-                "s3", region_name=self.region, config=self._config(),
+                "s3", region_name=self.region, endpoint_url=self._s3_endpoint(), config=self._config(),
                 aws_access_key_id=frozen.access_key, aws_secret_access_key=frozen.secret_key,
                 aws_session_token=frozen.token)
             now = self._now()

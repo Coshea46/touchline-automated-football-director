@@ -8,7 +8,7 @@ export default function WatchView({ active, replay }) {
   const { feeds, focused, focusedRef, headingRef, registerPlayer, clock, seekTo, reportPlayback, mainVideo,
     audio, audioEnabled, claimPending, claimControl, session, sessionState, director, pendingMode, modeNotice,
     requestMode, controlNotice, holdUntil, connection, captions, autoSwitch, previewsPaused, setPreviewsPaused,
-    pick, unavailable, finishRecommendation, pendingAck, toggleAuto } = replay;
+    pick, unavailable, finishRecommendation, pendingAck, toggleAuto, visitor } = replay;
   const { autoAvailable, autoStarting, autoToggleable, held, autoLabel, autoTitle, inferenceBuffering,
     inferenceLabel, now, monitoring, mode, scoreFresh, scores } = replay.view;
   return (
@@ -54,7 +54,11 @@ export default function WatchView({ active, replay }) {
               held={held} holdUntil={holdUntil} now={now} monitoring={monitoring} matchCount={feeds.length}
               monitoredCount={feeds.filter((feed) => feed.healthy !== false).length} starting={inferenceBuffering || autoStarting}
               connected={connection === 'connected'} connection={connection} canControl={sessionState?.controls_enabled !== false}
-              scoreFresh={scoreFresh} inferenceLabel={inferenceLabel} autoLabel={autoLabel} autoTitle={autoTitle} onToggle={toggleAuto} />
+              scoreFresh={scoreFresh} inferenceLabel={inferenceLabel} autoLabel={autoLabel} autoTitle={autoTitle} onToggle={toggleAuto}
+              visitor={visitor} sessionExpiresAt={sessionState?.session_expires_at || visitor?.expiresAt}
+              aiActive={sessionState?.ai_active} aiRemainingSeconds={Number.isFinite(sessionState?.ai_remaining_seconds)
+                ? Math.max(0, sessionState.ai_remaining_seconds - Math.max(0, now - sessionState.server_time)) : undefined}
+              aiReason={sessionState?.ai_reason} />
               <CommentaryCaptions feed={focused} mediaRef={mainVideo} live={captions.value} enabled={captions.enabled}
                 onToggle={captions.control} connected={connection === 'connected'}
                 canControl={sessionState?.controls_enabled !== false} />

@@ -168,6 +168,17 @@ class MonitoringCoordinator:
         if not can_start:
             session._set_state('stopped', 'auto_' + reason)
             return
+        if session._activation_guard is not None:
+            reason = await session._activation_guard()
+            if reason:
+                session._start_authorized = False
+                session.director.set_auto(False)
+                session._set_state('stopped', reason)
+                return
+            # Admission can yield to a disconnect or an explicit Off.
+            if not session.director.auto_enabled or session.controller is None or session._closing:
+                session._start_authorized = False
+                return
         if session.bridge is None:
             session._activation_inflight = True
             try:
@@ -346,6 +357,11 @@ class MonitoringCoordinator:
         session._start_inflight = asyncio.create_task(asyncio.to_thread(session.bridge.start, spec))
         try:
             session._handle = await asyncio.shield(session._start_inflight)
+        except asyncio.CancelledError:
+            # Even a completed native submission can be overtaken before the
+            # shield result is assigned. Shutdown must retain and drain that
+            # owned handle rather than orphaning a successful paid start.
+            raise
         except BaseException:
             if session._start_inflight.done():
                 session._start_inflight = None

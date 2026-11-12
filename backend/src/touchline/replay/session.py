@@ -32,7 +32,7 @@ class ReplaySession:
                  now=time.time, monotonic=time.monotonic, session_id=None,
                  caption_worker=None, caption_max_audio_seconds=DEFAULT_AUDIO_SECONDS,
                  caption_max_cost_usd=DEFAULT_COST_USD, prepared_config=None,
-                 bridge_factory=None, preparation_error=None):
+                 bridge_factory=None, preparation_error=None, activation_guard=None):
         self.captions = CaptionCoordinator(self)
         self.monitoring = MonitoringCoordinator(self)
         self.registry, self.config, self.bridge = registry, config or SessionConfig(), bridge
@@ -86,6 +86,7 @@ class ReplaySession:
                 or prepared_config.max_restarts != 0):
             raise ValueError(f'Prepared real monitoring requires a bounded 3600-second/${MAX_SESSION_BUDGET_USD} service allowance')
         self._prepared_config, self._bridge_factory = prepared_config, bridge_factory
+        self._activation_guard = activation_guard
         self._preparation_error = (preparation_error if preparation_error in
             ('credentials_unavailable', 'not_prepared') else None)
         self._activation_requested = False
@@ -537,13 +538,10 @@ class ReplaySession:
                     self._caption_enabled = False
                     self._caption_status, self._caption_reason = "unavailable", "runtime_unavailable"
 
-    async def close(self):
-        if self._closed:
-            return
-        closing_started = time.perf_counter()
-        self._closing = True
+    async def _close_paid_work(self, reason):
+        """Drain owned submissions before declaring paid work stopped."""
         self._caption_enabled = False
-        self._caption_revoke("session_closed", status="stopped")
+        self._caption_revoke(reason, status="stopped")
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -569,6 +567,32 @@ class ReplaySession:
                 logger.warning("Inference submission ended during shutdown (%s)", type(exc).__name__)
             self._start_inflight = None
         await self._stop_worker()
+
+    async def stop_monitoring(self, reason="monitoring_stopped"):
+        """Irrevocably finish paid work while keeping manual playback available."""
+        self._start_authorized = self._activation_requested = False
+        self._finished, self._finished_reason = True, reason
+        self._stop_requested = True
+        self.director.set_auto(False)
+        await self._close_paid_work(reason)
+        self.caption_worker = None
+        self._prepared_config = None
+        self.config = SessionConfig(max_restarts=0)
+        self._set_state("stopped", reason)
+        if not self._closing:
+            self.start()  # Disabled control loop still renews source URLs.
+        return (self._start_inflight is None and self._handle is None
+                and self._stopping_handle is None
+                and self.metrics.get("worker_stop_succeeded", self._reserved_compute_usd == 0) is True
+                and self.metrics.get("caption_stop_confirmed", True) is True
+                and not self.metrics.get("shutdown_sdk_thread_may_remain", False))
+
+    async def close(self):
+        if self._closed:
+            return
+        closing_started = time.perf_counter()
+        self._closing = True
+        await self._close_paid_work("session_closed")
         await self.monitoring.close_sources()
         self.playing = False
         self._set_state("stopped")

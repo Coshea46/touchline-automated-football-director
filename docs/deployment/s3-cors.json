@@ -1,0 +1,15 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://touchline-football-director.vercel.app",
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "http://localhost:3030",
+      "http://127.0.0.1:3030"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag", "Content-Length", "Content-Range", "Accept-Ranges"],
+    "MaxAgeSeconds": 3600
+  }
+]
