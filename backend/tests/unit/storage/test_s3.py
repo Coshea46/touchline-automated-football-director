@@ -10,8 +10,7 @@ import pytest
 from touchline.storage import S3Access, StorageAuthorizationError
 
 
-ROLE = "arn:aws:iam::709860105019:role/TouchlineVideoReader"
-BUCKET = "touchline-videos-709860105019-eu-west-2-an"
+from tests.support.storage import ROLE, BUCKET, Clock, FakeClient, FakeSession, FakeSTS, oidc_access, response
 
 
 def test_real_sdk_presigns_regional_host_without_redirect_or_network():
@@ -31,93 +30,6 @@ def test_real_sdk_presigns_regional_host_without_redirect_or_network():
             assert "/eu-west-2/s3/aws4_request" in scope
     finally:
         access.close()
-
-
-class Clock:
-    def __init__(self):
-        self.value = 1_800_000_000.0
-
-    def __call__(self):
-        return self.value
-
-
-def response(clock, *, suffix="one", lifetime=3600):
-    return {"Credentials": {
-        "AccessKeyId": "TEST_ACCESS_" + suffix,
-        "SecretAccessKey": "PRIVATE_TEST_SECRET_" + suffix,
-        "SessionToken": "PRIVATE_TEST_SESSION_" + suffix,
-        "Expiration": datetime.fromtimestamp(clock() + lifetime, timezone.utc),
-    }}
-
-
-class FakeSTS:
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = []
-        self.closed = False
-
-    def assume_role_with_web_identity(self, **kwargs):
-        self.calls.append(kwargs)
-        value = self.responses.pop(0)
-        if isinstance(value, Exception):
-            raise value
-        return value() if callable(value) else value
-
-    def close(self):
-        self.closed = True
-
-
-class FakeClient:
-    def __init__(self, session, kwargs):
-        self.session, self.kwargs = session, kwargs
-        self.calls = []
-        self.closed = False
-
-    def generate_presigned_url(self, method, **kwargs):
-        self.calls.append((method, kwargs))
-        return "https://private.example/video?signature=PRIVATE_TEST_SIGNATURE"
-
-    def head_object(self, **kwargs):
-        self.calls.append(("head_object", kwargs))
-        return {"ContentLength": 1234, "ETag": '"test-etag"'}
-
-    def close(self):
-        self.closed = True
-
-
-class FakeSession:
-    def __init__(self, credentials=None, *, botocore_session=None):
-        self.credentials = credentials
-        self.core = botocore_session
-        self.clients = []
-
-    def get_credentials(self):
-        return self.core.get_credentials() if self.core is not None else self.credentials
-
-    def client(self, name, **kwargs):
-        assert name == "s3"
-        client = FakeClient(self, kwargs)
-        self.clients.append(client)
-        return client
-
-
-def oidc_access(clock, sts, env=None, **options):
-    env = env if env is not None else {"MODAL_IDENTITY_TOKEN": "PRIVATE_TEST_OIDC_ONE", "AWS_ROLE_ARN": ROLE}
-    sessions, session_options, sts_options = [], [], []
-
-    def session_factory(**kwargs):
-        session_options.append(kwargs)
-        session = FakeSession(botocore_session=kwargs.get("botocore_session"))
-        sessions.append(session)
-        return session
-
-    def sts_factory(**kwargs):
-        sts_options.append(kwargs)
-        return sts
-
-    access = S3Access(env, now=clock, session_factory=session_factory,
-                      sts_client_factory=sts_factory, **options)
-    return access, env, sessions, session_options, sts_options
 
 
 def test_oidc_initialization_is_lazy_and_never_uses_the_local_credential_chain():
@@ -156,6 +68,8 @@ def test_each_refresh_rereads_the_token_and_rotates_credentials_without_mutating
     assert second.actual_ttl_seconds == 3570
     assert second.authorization_expires_at == clock() + 3600
     assert env == expected_env
+    assert len(sessions[0].clients) == 2
+    assert sessions[0].clients[0].closed and not sessions[0].clients[1].closed
 
 
 def test_head_and_get_are_signed_separately_with_bounded_expiry_and_no_fixed_range():
@@ -163,14 +77,16 @@ def test_head_and_get_are_signed_separately_with_bounded_expiry_and_no_fixed_ran
     access, _, sessions, _, _ = oidc_access(clock, FakeSTS([response(clock, lifetime=1800)]))
     get_result = access.presign_get(BUCKET, "match-2.mp4", 1000)
     head_result = access.presign_head(BUCKET, "match-2.mp4", 2000)
-    get_client, head_client = sessions[0].clients
-    assert get_client.calls == [("get_object", {"Params": {"Bucket": BUCKET, "Key": "match-2.mp4"}, "ExpiresIn": 1000})]
-    assert head_client.calls[0][0] == "head_object"
-    assert head_client.calls[0][1]["ExpiresIn"] == 1770
+    signer, = sessions[0].clients
+    assert signer.calls[0] == ("get_object", {"Params": {"Bucket": BUCKET, "Key": "match-2.mp4"}, "ExpiresIn": 1000})
+    assert signer.calls[1][0] == "head_object"
+    assert signer.calls[1][1]["ExpiresIn"] == 1770
     assert get_result.expires_at == clock() + 1000
     assert head_result.expires_at == clock() + 1770
-    assert get_client.closed and head_client.closed
-    assert get_client.kwargs["config"].signature_version == "s3v4"
+    assert not signer.closed
+    assert signer.kwargs["config"].signature_version == "s3v4"
+    access.close()
+    assert signer.closed and signer.close_calls == 1
 
 
 def test_explicit_token_provider_is_called_for_each_sts_exchange():
@@ -245,7 +161,43 @@ def test_parallel_initial_signing_uses_one_sts_credential_generation():
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(lambda _: access.presign_get(BUCKET, "match-1.mp4"), range(8)))
     assert len(sts.calls) == len(sessions) == 1
+    assert len(sessions[0].clients) == 1  # One cached signer for the generation.
     assert len(results) == 8
+
+
+def test_cached_signer_recomputes_remaining_expiry_without_rebuilding_or_reusing_stale_credentials():
+    clock = Clock()
+    sts = FakeSTS([response(clock, lifetime=3600)])
+    access, _, sessions, _, _ = oidc_access(clock, sts)
+    access.warm()
+    head_client, signer = sessions[0].clients
+    first = access.presign_get(BUCKET, "match-1.mp4", 3600)
+    clock.value += 100
+    second = access.presign_head(BUCKET, "match-1.mp4", 3600)
+    assert first.actual_ttl_seconds == 3570 and second.actual_ttl_seconds == 3470
+    assert first.authorization_expires_at == second.authorization_expires_at == clock() + 3500
+    assert len(sts.calls) == 1 and sessions[0].clients == [head_client, signer]
+    assert [call[0] for call in signer.calls] == ["get_object", "head_object"]
+    assert access.close() is True
+    assert head_client.close_calls == signer.close_calls == 1
+    with pytest.raises(StorageAuthorizationError, match="aws_access_closed"):
+        access.presign_get(BUCKET, "match-1.mp4")
+
+
+def test_credential_snapshot_does_not_hold_owner_lock_while_refresh_callback_can_acquire_it():
+    owner = []
+    class CheckedCredentials(Credentials):
+        def get_frozen_credentials(self):
+            assert not owner[0]._lock._is_owned(), "Credential refresh lock ordering inverted"
+            return super().get_frozen_credentials()
+    session = FakeSession(CheckedCredentials("OFFLINE_ACCESS", "OFFLINE_SECRET"))
+    access = S3Access({}, session_factory=lambda **kwargs: session)
+    owner.append(access)
+    access.warm()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: access.presign_get(BUCKET, "match-1.mp4"), range(8)))
+    assert len(results) == 8 and len(session.clients) == 2
+    access.close()
 
 
 def test_sdk_errors_and_url_repr_do_not_expose_tokens(caplog):

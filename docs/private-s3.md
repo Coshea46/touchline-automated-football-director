@@ -49,6 +49,14 @@ the injected `MODAL_IDENTITY_TOKEN` and configured `AWS_ROLE_ARN` select STS
 each exchange reads the current token from the live environment/provider.
 Credentials are not copied into global environment variables or the frontend.
 
+The hosted API warms and owns one refreshable S3 access resource. Visitor
+registries borrow it and reuse a signer only for the exact frozen credential
+generation and expiry. Token rotation rebuilds that signer; each URL still gets
+its own bounded signature. Every visitor performs fresh object HEAD checks and
+identity validation. This shares authorization setup, not playback state or
+cached claims about an object's identity. App shutdown waits for outstanding
+borrowed native work before closing the AWS clients.
+
 Local runs use the normal AWS credential chain, including an existing
 `AWS_PROFILE`. Setting a role ARN locally does not impersonate a Modal function or
 trigger the Modal exchange without its identity token. Use an authenticated local

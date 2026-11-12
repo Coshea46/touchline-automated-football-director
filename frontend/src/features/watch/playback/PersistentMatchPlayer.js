@@ -13,7 +13,7 @@ const MAX_AUTHORIZATION_SEEKS = 3;
 // changes only presentation/clock ownership; a warm aligned source never reloads.
 export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock, seekTo, onPlayback,
   onAvailability, mediaRef, inferenceBuffering = false, audioAllowed = true, previewsPaused = false,
-  watching = true, onClick, score, scoreKind = 'model', monitoring = false, style, registerPlayer }) {
+  watching = true, loadEnabled = true, onClick, score, scoreKind = 'model', monitoring = false, style, registerPlayer }) {
   const ref = useRef(null);
   const props = useRef(null);
   const actions = useRef(null);
@@ -24,8 +24,12 @@ export default function PersistentMatchPlayer({ feed, focused, focusedRef, clock
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
+  const loadingStarted = useRef(false);
+  // Prioritize the first focused decoder. This gate only delays never-started
+  // previews; focus always starts immediately and an opened decoder stays open.
+  if (focused || loadEnabled) loadingStarted.current = true;
   const authorization = useMediaAuthorization(feed, clock);
-  const source = authorization.url;
+  const source = loadingStarted.current ? authorization.url : '';
   const identity = authorization.identity;
   const recoverAuthorization = authorization.recover;
   const offset = sourceOffset(feed);

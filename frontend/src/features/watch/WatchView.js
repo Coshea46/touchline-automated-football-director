@@ -1,10 +1,12 @@
 import { Pause, Play } from 'lucide-react';
+import { useState } from 'react';
 import PersistentMatchPlayer from './playback/PersistentMatchPlayer';
 import ReplayScore from './playback/ReplayScore';
 import DirectorPanel from './director/DirectorPanel';
 import CommentaryCaptions from '../captions/CommentaryCaptions';
 
 export default function WatchView({ active, replay }) {
+  const [previewsStarted, setPreviewsStarted] = useState(false);
   const { feeds, focused, focusedRef, headingRef, registerPlayer, clock, seekTo, reportPlayback, mainVideo,
     audio, audioEnabled, claimPending, claimControl, session, sessionState, director, pendingMode, modeNotice,
     requestMode, controlNotice, holdUntil, connection, captions, autoSwitch, previewsPaused, setPreviewsPaused,
@@ -35,9 +37,14 @@ export default function WatchView({ active, replay }) {
                   registerPlayer={registerPlayer}
                   clock={clock} seekTo={seekTo} onPlayback={reportPlayback} mediaRef={mainVideo}
                   inferenceBuffering={inferenceBuffering} audioAllowed={audio.owned && audioEnabled}
+                  loadEnabled={selected || previewsStarted}
                   previewsPaused={previewsPaused} watching={active} onClick={() => pick(feed.id)}
                   onAvailability={(matchId, available) => {
-                    if (available) { unavailable.current.delete(matchId); finishRecommendation(); }
+                    // A failed initial focus also releases fallback sources.
+                    if (selected) setPreviewsStarted(true);
+                    if (available) {
+                      unavailable.current.delete(matchId); finishRecommendation();
+                    }
                     else { unavailable.current.add(matchId); if (selected) pendingAck.current = null; }
                   }}
                   score={scores[feed.cameraId]} scoreKind={sessionState?.mode === 'features_mock' ? 'mock' : 'model'} monitoring={monitoring}

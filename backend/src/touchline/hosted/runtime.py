@@ -6,11 +6,21 @@ from dataclasses import replace
 from touchline.ml_inference.models.release import NEW_MODEL_VERSION
 from touchline.ml_inference.streaming.contract import MATCHES_PER_GPU
 from touchline.replay import ReplaySession, SessionConfig, SourceRegistry
+from touchline.storage import S3Access
 
 
-async def create_session(env, session_id, activation_guard):
+def create_source_access(env):
+    """Construct one app-owned credential resource without contacting AWS."""
+    configuration = SourceRegistry.from_env(env)
+    if configuration.access != "presigned" or not any(source.key for source in configuration.sources):
+        return None
+    return S3Access(configuration._aws_env, region=configuration.region,
+        token_provider=(lambda: env.get("MODAL_IDENTITY_TOKEN")) if env.get("MODAL_IDENTITY_TOKEN") else None)
+
+
+async def create_session(env, session_id, activation_guard, *, source_access=None):
     source_env = {**env, "MATCHPULSE_OFFSETS_JSON": "{}"}
-    registry = SourceRegistry.from_env(source_env)
+    registry = SourceRegistry.from_env(source_env, s3_access=source_access, owns_access=source_access is None)
     if env.get("MODAL_IDENTITY_TOKEN"):
         # Modal rotates its identity token in the live process environment.
         # Source configuration is copied, but credential refresh must not pin
@@ -21,7 +31,7 @@ async def create_session(env, session_id, activation_guard):
     registry.sources = tuple(replace(source, offset_seconds=0) for source in registry.sources)
     prepared = SessionConfig(monitor=True, mode="real", model_version=NEW_MODEL_VERSION,
         checkpoint=NEW_MODEL_VERSION, max_duration_seconds=1200,
-        max_estimated_cost_usd=2.20, max_restarts=0,
+        max_estimated_cost_usd=2.60, max_restarts=0,
         gpu_workers=math.ceil(len(registry.sources) / MATCHES_PER_GPU))
     session = ReplaySession(registry, config=SessionConfig(max_restarts=0),
         session_id=session_id, prepared_config=prepared, activation_guard=activation_guard,

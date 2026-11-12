@@ -35,7 +35,7 @@ class Admission:
         permit_id = f"permit-{len(self.acquired)}"
         self.acquired.append((session_id, peer, component))
         return {"permit_id": permit_id, "duration_seconds": 1200,
-                "reserved_usd": 2.20 if component == "director" else .14}
+                "reserved_usd": 2.60 if component == "director" else .14}
 
     async def release_ai(self, session_id, confirmed=False):
         self.released.append((session_id, confirmed))
@@ -68,7 +68,7 @@ class Factory:
             identity={"digest": "a" * 64})])
         prepared = SessionConfig(monitor=True, mode="real", model_version=NEW_MODEL_VERSION,
             checkpoint=NEW_MODEL_VERSION, max_duration_seconds=1200,
-            max_estimated_cost_usd=2.20, max_restarts=0, gpu_workers=1)
+            max_estimated_cost_usd=2.60, max_restarts=0, gpu_workers=1)
         session = await ReplaySession(registry, session_id=session_id,
             prepared_config=prepared, bridge_factory=lambda: bridge,
             caption_worker=worker, caption_max_audio_seconds=1200,

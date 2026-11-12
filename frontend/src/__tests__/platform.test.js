@@ -364,13 +364,15 @@ test.each(['manual', 'automatic'])('%s selection changes caption tracks at the a
   const video = screen.getByLabelText(`${FEEDS[0].label} video`);
   const nodes = [...container.querySelectorAll('video')];
   const destination = container.querySelector(`.tile[data-feed-id="${FEEDS[1].id}"] video`);
-  const destinationSource = destination.getAttribute('src');
+  expect(destination).not.toHaveAttribute('src');
   expect(nodes).toHaveLength(FEEDS.length);
   expect(destination).not.toBe(video);
   Object.defineProperty(video, 'readyState', { configurable: true, value: 2 });
   Object.defineProperty(video, 'duration', { configurable: true, value: 1000 });
   fireEvent.loadedMetadata(video); fireEvent.canPlay(video);
   expect(video.currentTime).toBe(120);
+  const destinationSource = destination.getAttribute('src');
+  expect(destinationSource).toBe(getVideoUrl(FEEDS[1]));
   if (kind === 'automatic') {
     // Auto can promote only an already decoded, aligned native pool player.
     Object.defineProperty(destination, 'readyState', { configurable: true, value: 2 });

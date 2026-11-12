@@ -6,12 +6,14 @@ filter never receives waveform samples beyond that observation endpoint.
 """
 
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from fractions import Fraction
 from numbers import Integral, Real
 from pathlib import Path
 from threading import RLock
+from time import perf_counter
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -163,10 +165,12 @@ class MediaCursor:
         self._last_permit = None
         self._primed = False
         self._last_av_error_type = self._last_av_error_phase = None
+        self._timings = dict.fromkeys(("video_open_seconds", "audio_open_seconds", "parallel_open_seconds",
+            "video_seek_seconds", "audio_seek_seconds", "prime_seconds", "cursor_init_seconds"), 0.0)
+        initialization_started = perf_counter()
         open_options = {'options': dict(HTTP_OPTIONS)} if urlsplit(source).scheme in ('http', 'https') else {}
         try:
-            self._video_container = self._av_call(self._av.open, source, timeout=(10, 5),
-                                                   _phase='video_open', **open_options)
+            self._open_containers(source, open_options)
             if not self._video_container.streams.video:
                 raise MediaTimelineError("Source contains no video stream")
             self._video_stream = self._video_container.streams.video[0]
@@ -181,8 +185,6 @@ class MediaCursor:
             if self._shape[0] * self._shape[1] > MAX_FRAME_PIXELS:
                 raise MediaTimelineError("Video exceeds the 2073600-pixel frame limit")
             stream.codec_context.thread_count = 1
-            self._audio_container = self._av_call(self._av.open, source, timeout=(10, 5),
-                                                   _phase='audio_open', **open_options)
             if not self._audio_container.streams.audio and self.audio_contract == LEGACY_AUDIO:
                 raise MediaTimelineError("Source contains no audio stream")
             self._audio_stream = (self._audio_container.streams.audio[0]
@@ -194,12 +196,12 @@ class MediaCursor:
                 raise MediaTimelineError("Source audio must contain one or two channels")
             initial_source_time = self.offset_seconds + self.next_index / FPS
             video_seek = max(0, initial_source_time - 0.25) + self._video_origin
-            self._av_call(self._video_container.seek, int(video_seek / stream.time_base), stream=stream,
-                          backward=True, _phase='video_seek')
+            self._timed_av_call('video_seek_seconds', self._video_container.seek,
+                int(video_seek / stream.time_base), stream=stream, backward=True, _phase='video_seek')
             audio_seek = max(0, self._video_origin + initial_source_time - 0.25)
             if self._audio_stream is not None:
-                self._av_call(self._audio_container.seek, int(audio_seek * self._av.time_base), backward=True,
-                              _phase='audio_seek')
+                self._timed_av_call('audio_seek_seconds', self._audio_container.seek,
+                    int(audio_seek * self._av.time_base), backward=True, _phase='audio_seek')
             self._video_frames = iter(self._av_call(self._video_container.decode, self._video_stream))
             self._audio_frames = (iter(self._av_call(self._audio_container.decode, self._audio_stream))
                                   if self._audio_stream else iter(()))
@@ -218,11 +220,57 @@ class MediaCursor:
                 "audio_contract": self.audio_contract,
                 "audio_decoder_sha256": DECODER_SHA256 if self.audio_contract == SAMPLECLOCK_AUDIO else None,
             }
-        except Exception as exc:
+        except BaseException as exc:
+            original_error = (self._last_av_error_type, self._last_av_error_phase)
             self.close()
+            self._last_av_error_type, self._last_av_error_phase = original_error
+            if not isinstance(exc, Exception):
+                raise
             if isinstance(exc, MediaTimelineError):
                 raise
             raise self._safe_error('open', exc) from None
+        finally:
+            self._timings['cursor_init_seconds'] = perf_counter() - initialization_started
+
+    def _timed_av_call(self, timing, function, *args, **kwargs):
+        started = perf_counter()
+        try:
+            return self._av_call(function, *args, **kwargs)
+        finally:
+            with self._lock:
+                self._timings[timing] += perf_counter() - started
+
+    def _open_containers(self, source, open_options):
+        """Open independent handles concurrently, then join/own every outcome.
+
+        Even if one open fails, drain its sibling before constructor cleanup so
+        a successfully opened native handle cannot arrive after close().
+        """
+        started, failure, pending = perf_counter(), None, []
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix='replay-av-open') as pool:
+            for kind in ('video', 'audio'):
+                options = {'options': dict(open_options['options'])} if 'options' in open_options else {}
+                try:
+                    future = pool.submit(self._timed_av_call, kind + '_open_seconds', self._av.open,
+                        source, timeout=(10, 5), _phase=kind + '_open', **options)
+                    pending.append((kind, future))
+                except BaseException as exc:
+                    failure = (kind + '_open', exc)
+                    break
+            for kind, future in pending:
+                try:
+                    setattr(self, '_' + kind + '_container', future.result())
+                except BaseException as exc:
+                    if failure is None or kind == 'video':
+                        failure = (kind + '_open', exc)
+        self._timings['parallel_open_seconds'] = perf_counter() - started
+        if failure is not None:
+            # AV calls can fail in either completion order. Keep deterministic
+            # video-before-audio failure precedence from the former serial opens.
+            with self._lock:
+                self._last_av_error_phase = failure[0]
+                self._last_av_error_type = type(failure[1]).__name__
+            raise failure[1]
 
     def _safe_error(self, phase, exc):
         error = RuntimeError(f"Media {phase} failed ({type(exc).__name__})")
@@ -374,6 +422,7 @@ class MediaCursor:
         with self._pull_lock:
             if self._closed or self._failed or self.next_index != self._initial_index:
                 raise RuntimeError('Media priming requires an unopened sampling epoch')
+            started = perf_counter()
             try:
                 self._displayed(self.offset_seconds + base, self._initial_index)
                 self._advance_audio(self.offset_seconds + base)
@@ -385,6 +434,9 @@ class MediaCursor:
                 if isinstance(exc, MediaTimelineError):
                     raise
                 raise self._safe_error('prime', exc) from None
+            finally:
+                with self._lock:
+                    self._timings['prime_seconds'] += perf_counter() - started
 
     def pull(self, permitted_position, limit=16):
         """Return at most ``limit`` newly permitted 15Hz samples, in source order."""
@@ -498,6 +550,7 @@ class MediaCursor:
     def stats(self):
         with self._lock:
             return {
+                **self._timings,
                 "next_sample_index": self.next_index, "audio_history_bytes": self._audio_bytes,
                 "primed": self._primed, "last_av_error_type": self._last_av_error_type,
                 "last_av_error_phase": self._last_av_error_phase,

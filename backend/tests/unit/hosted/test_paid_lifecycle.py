@@ -158,7 +158,7 @@ def test_real_admission_keeps_failed_visitor_fenced_without_blocking_another_vis
             with admission._connect() as db:
                 closed = dict(db.execute("SELECT session,closed FROM permits"))
                 assert closed[first.ai_permit] == closed[second.ai_permit] == 0
-                assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(4.40)
+                assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(5.20)
         finally:
             await manager.close()
         with admission._connect() as db:

@@ -61,14 +61,17 @@ class Resampler:
 
 
 class Container:
-    def __init__(self, frames, video_stream, audio_stream):
+    def __init__(self, frames, video_stream, audio_stream, *, audio_frames=None):
         self.frames = frames
+        self.audio_frames = audio_frames
         self.streams = SimpleNamespace(video=[video_stream], audio=[audio_stream])
         self.seek_calls = []
         self.closed = False
 
     def seek(self, timestamp, **kwargs):
         self.seek_calls.append((timestamp, kwargs))
+        if 'stream' not in kwargs and self.audio_frames is not None:
+            self.frames = self.audio_frames
 
     def decode(self, stream):
         return iter(self.frames)
@@ -102,8 +105,9 @@ class AV:
     def open(self, source, **kwargs):
         assert kwargs == {'timeout': (10, 5), 'options': HTTP_OPTIONS}
         assert source == PRIVATE_SOURCE
-        container = Container(self.video if not self.containers else self.audio,
-                              self.video_stream, self.audio_stream)
+        # Every real AV handle exposes both streams. Role comes from stream
+        # selection/seek, never which concurrent open happened to finish first.
+        container = Container(self.video, self.video_stream, self.audio_stream, audio_frames=self.audio)
         self.containers.append(container)
         return container
 

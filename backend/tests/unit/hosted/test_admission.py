@@ -32,7 +32,7 @@ def test_twenty_minute_component_reservations_cover_costs_and_funding_defaults_a
     from touchline.captions.limits import LIVE_PRICE_PER_HOUR_USD
     assert AdmissionPolicy.AI_SECONDS == 1200
     assert (1200 + 330) * 4 * MAX_WORKER_RATE == pytest.approx(2.1087072)
-    assert (1200 + 330) * 4 * MAX_WORKER_RATE <= AdmissionPolicy.AI_RESERVATION_USD == 2.20
+    assert (1200 + 330) * 4 * MAX_WORKER_RATE * 1.15 <= AdmissionPolicy.AI_RESERVATION_USD == 2.60
     assert 1200 * LIVE_PRICE_PER_HOUR_USD / 3600 <= AdmissionPolicy.CAPTION_RESERVATION_USD == .14
     async def case():
         policy = AdmissionPolicy(tmp_path / "db", env={})
@@ -52,7 +52,7 @@ def test_parallel_visitors_both_start_and_each_commits_before_return(tmp_path):
         leases = await asyncio.gather(policy.acquire_ai("a", "peer-a"), policy.acquire_ai("b", "peer-b"))
         assert commits == ["committed", "committed"]
         assert len({lease["permit_id"] for lease in leases}) == 2
-        assert all(lease["duration_seconds"] == 1200 and lease["reserved_usd"] == 2.20
+        assert all(lease["duration_seconds"] == 1200 and lease["reserved_usd"] == 2.60
                    and lease["expires_at"] == 11200 and lease["component"] == "director" for lease in leases)
     asyncio.run(case())
 
@@ -60,14 +60,14 @@ def test_parallel_visitors_both_start_and_each_commits_before_return(tmp_path):
 def test_parallel_budget_reservations_are_atomic_even_across_policy_instances(tmp_path):
     async def case():
         path = tmp_path / "db"
-        env = {"TOUCHLINE_AI_DAILY_BUDGET_USD": "2.20", "TOUCHLINE_AI_TOTAL_BUDGET_USD": "2.20"}
+        env = {"TOUCHLINE_AI_DAILY_BUDGET_USD": "2.60", "TOUCHLINE_AI_TOTAL_BUDGET_USD": "2.60"}
         first, second = AdmissionPolicy(path, env=env), AdmissionPolicy(path, env=env)
         results = await asyncio.gather(first.acquire_ai("a", "peer-a"), second.acquire_ai("b", "peer-b"),
                                        return_exceptions=True)
         assert sum(isinstance(result, dict) for result in results) == 1
         assert sum(isinstance(result, AdmissionDenied) and result.code == "ai_budget_exhausted" for result in results) == 1
         with first._connect() as db:
-            assert db.execute("SELECT COUNT(*),SUM(amount) FROM permits").fetchone() == (1, 2.20)
+            assert db.execute("SELECT COUNT(*),SUM(amount) FROM permits").fetchone() == (1, 2.60)
             assert db.execute("SELECT COUNT(*) FROM permit_components").fetchone()[0] == 1
     asyncio.run(case())
 
@@ -87,7 +87,7 @@ def test_open_component_blocks_only_its_owner_and_confirmed_release_can_restart_
             rows = dict(db.execute("SELECT session,closed FROM permits"))
             assert rows[director["permit_id"]] == 1
             assert all(rows[lease["permit_id"]] == 0 for lease in (captions, other, restarted))
-            assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(6.74)
+            assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(7.94)
     asyncio.run(case())
 
 
@@ -173,9 +173,9 @@ def test_historical_schema_rows_salt_and_creations_survive_and_count_toward_rate
             assert db.execute("SELECT * FROM permits WHERE session LIKE 'old-%' ORDER BY session").fetchall() == old
             assert db.execute("SELECT * FROM settings").fetchall() == [("peer_salt", "synthetic-historical-salt")]
             assert db.execute("SELECT * FROM creations").fetchall() == [("old-creation-peer", 9999)]
-            assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(sum(row[4] for row in old) + 2.20)
+            assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(sum(row[4] for row in old) + 2.60)
         restored = AdmissionPolicy(path, env={"TOUCHLINE_AI_DAILY_BUDGET_USD": "100",
-            "TOUCHLINE_AI_TOTAL_BUDGET_USD": str(sum(row[4] for row in old) + 2.20)}, now=lambda: now[0])
+            "TOUCHLINE_AI_TOTAL_BUDGET_USD": str(sum(row[4] for row in old) + 2.60)}, now=lambda: now[0])
         with pytest.raises(AdmissionDenied, match="ai_budget_exhausted"):
             await restored.acquire_ai("unrelated", "other-peer", component="captions")
         now[0] += 2700
@@ -202,13 +202,13 @@ def test_default_lifetime_ceiling_never_refunds_closed_component_reservations(tm
         policy = AdmissionPolicy(tmp_path / "db", env={"TOUCHLINE_AI_DAILY_BUDGET_USD": "100"})
         director = await policy.acquire_ai("visitor", "peer")
         await policy.release_ai(director["permit_id"], confirmed=True)
-        for _ in range(5):
+        for _ in range(2):
             caption = await policy.acquire_ai("visitor", "peer", component="captions")
             await policy.release_ai(caption["permit_id"], confirmed=True)
         with pytest.raises(AdmissionDenied, match="ai_budget_exhausted"):
             await policy.acquire_ai("visitor", "peer", component="captions")
         with policy._connect() as db:
-            assert db.execute("SELECT COUNT(*),SUM(amount),SUM(closed) FROM permits").fetchone() == (6, pytest.approx(2.90), 6)
+            assert db.execute("SELECT COUNT(*),SUM(amount),SUM(closed) FROM permits").fetchone() == (3, pytest.approx(2.88), 3)
     asyncio.run(case())
 
 

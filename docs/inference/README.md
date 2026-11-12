@@ -160,7 +160,8 @@ the joined public path remains unverified. Earlier T4 queueing exceeded the
 `MATCHPULSE_MODAL_WS_CONNECT_TIMEOUT=110`; the generic default stays 90 seconds
 and public Director and caption runs are independently capped at 1200 seconds.
 Manual seven-source browser playback and focused Scribe delivery passed
-separately. Current reservations are $2.20 per Director run and $0.14 per caption
+separately. Current reservations are $2.60 per Director run, including the broad
+EU placement premium, and $0.14 per caption
 run; see [hosted admission and verification](../modal-backend.md). The older live
 checks below used the former two-minute policy; the twenty-minute policy has
 provider-free lifecycle and clock-expiry tests, without a new paid AI run.

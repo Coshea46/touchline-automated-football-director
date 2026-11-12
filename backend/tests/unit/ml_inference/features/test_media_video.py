@@ -80,7 +80,7 @@ def test_nonzero_stream_origin_and_replay_offset_preserve_source_timeline():
     assert samples[0].source_timestamp == pytest.approx(4)
     result = worker.audio_window(2, 7)
     assert result[0, 0] == pytest.approx(0.08)
-    assert av.containers[0].seek_calls[0][0] == int((10 + 2 + 2 - 0.25) * 25)
+    assert worker._video_container.seek_calls[0][0] == int((10 + 2 + 2 - 0.25) * 25)
 
 
 def test_partial_final_batch_is_returned_before_typed_eof():

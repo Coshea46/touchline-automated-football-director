@@ -2,15 +2,21 @@
 
 import asyncio
 import json
+import logging
 import os
+import re
+import time
 from contextlib import suppress
 from urllib.parse import parse_qs
 
 from touchline.api.routes import ApplicationRoutes
 from touchline.api.websocket import allowed_origins
 from touchline.football_platform.service import PlatformService
-from touchline.hosted.runtime import create_session
+from touchline.hosted.runtime import create_session, create_source_access
 from touchline.hosted.sessions import SessionDenied, SessionManager, public_code
+from touchline.storage import StorageAuthorizationError
+
+logger = logging.getLogger(__name__)
 
 CLOSE_CODES = {"invalid_hello": 4400, "resume_rejected": 4403,
     "session_expired": 4404, "hello_timeout": 4408, "session_replaced": 4409,
@@ -63,19 +69,26 @@ class Socket:
 
 
 class HostedApplication:
-    def __init__(self, env, admission, session_factory=None, routes=None, *, now=None):
+    def __init__(self, env, admission, session_factory=None, routes=None, *, now=None, source_access=None):
         self.env, self.admission = env, admission
         configured_origins = env.get("MATCHPULSE_ALLOWED_ORIGINS")
         if not configured_origins:
             raise ValueError("Hosted service requires explicit MATCHPULSE_ALLOWED_ORIGINS")
         self.origins = {origin for origin in allowed_origins(configured_origins) if origin}
-        factory = session_factory or (lambda session_id, guard: create_session(env, session_id, guard))
+        self.source_access = (source_access if source_access is not None else
+                              create_source_access(env) if session_factory is None else None)
+        factory = session_factory or (lambda session_id, guard: create_session(
+            env, session_id, guard, source_access=self.source_access))
         self.sessions = SessionManager(factory, admission, **({"now": now} if now else {}))
         self.routes = routes or ApplicationRoutes(service=PlatformService.from_env(env))
         self._sweeper = None
         self._handlers = set()
         self._closed = False
         self._caption_limit = asyncio.Semaphore(4)
+        self._source_warm_task = None
+        self.source_warm_error = None
+        self.source_warm_seconds = 0.0
+        self.source_access_close_confirmed = None
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "lifespan":
@@ -94,10 +107,37 @@ class HostedApplication:
             await self.sessions.sweep()
             await asyncio.sleep(0.5)
 
+    async def _warm_source_access(self):
+        if self.source_access is None:
+            return
+        started = time.monotonic()
+        if self._source_warm_task is None:
+            self._source_warm_task = asyncio.create_task(asyncio.to_thread(self.source_access.warm))
+            def finished(task):
+                if not task.cancelled():
+                    task.exception()  # Retrieve late failures after lifespan cancellation.
+            self._source_warm_task.add_done_callback(finished)
+        try:
+            await asyncio.shield(self._source_warm_task)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            label = exc.code if isinstance(exc, StorageAuthorizationError) else type(exc).__name__
+            if not isinstance(label, str) or re.fullmatch(r'[A-Za-z_]{1,64}', label) is None:
+                label = "source_warm_unavailable"
+            self.source_warm_error = label
+            logger.warning("Source authorization warmup unavailable (%s)", label)
+            self._source_warm_task = None
+        else:
+            self.source_warm_error = None
+        finally:
+            self.source_warm_seconds = time.monotonic() - started
+
     async def _lifespan(self, receive, send):
         while True:
             event = await receive()
             if event["type"] == "lifespan.startup":
+                await self._warm_source_access()
                 self._ensure_sweeper()
                 await send({"type": "lifespan.startup.complete"})
             elif event["type"] == "lifespan.shutdown":
@@ -118,11 +158,19 @@ class HostedApplication:
         for task in handlers:
             task.cancel()
         await asyncio.gather(*handlers, return_exceptions=True)
-        await self.sessions.close()
-        await self.routes.close()
-        close_admission = getattr(self.admission, "close", None)
-        if close_admission is not None:
-            await close_admission()
+        try:
+            await self.sessions.close()
+            await self.routes.close()
+            close_admission = getattr(self.admission, "close", None)
+            if close_admission is not None:
+                await close_admission()
+        finally:
+            if self.source_access is not None:
+                try:
+                    self.source_access_close_confirmed = await asyncio.to_thread(self.source_access.close)
+                except Exception:
+                    self.source_access_close_confirmed = False
+                    logger.warning("Source authorization cleanup unavailable")
 
     async def _message(self, receive):
         event = await receive()
@@ -289,10 +337,10 @@ class HostedApplication:
         await send({"type": "http.response.body", "body": body})
 
 
-def create_app(*, env=None, admission=None, session_factory=None, routes=None, now=None):
+def create_app(*, env=None, admission=None, session_factory=None, routes=None, now=None, source_access=None):
     """No listening sockets, provider requests or cloud work during construction."""
     env = os.environ if env is None else env
     if admission is None:
         from touchline.hosted.admission import AdmissionPolicy
         admission = AdmissionPolicy(env=env)
-    return HostedApplication(env, admission, session_factory, routes, now=now)
+    return HostedApplication(env, admission, session_factory, routes, now=now, source_access=source_access)

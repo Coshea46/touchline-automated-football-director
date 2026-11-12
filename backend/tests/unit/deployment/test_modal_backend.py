@@ -92,7 +92,7 @@ def test_public_cpu_function_keeps_one_warm_memory_owner(monkeypatch):
     assert options["timeout"] >= 1200 + 60
     assert "retries" not in options  # Web functions reject any explicit retry setting.
     assert options["routing_region"] == "eu-west"
-    assert "gpu" not in options and "region" not in options
+    assert "gpu" not in options and options["region"] == "eu-west"
     assert module.public_backend.concurrency_options["max_inputs"] > 10
     assert module.public_backend.asgi_options == {"label": "touchline-backend"}
     assert options["include_source"] is False

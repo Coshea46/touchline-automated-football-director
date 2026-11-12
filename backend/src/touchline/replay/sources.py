@@ -99,7 +99,7 @@ class SourceRegistry:
 
     def __init__(self, sources, *, bucket=LEGACY_PUBLIC_BUCKET, region=VIDEO_REGION,
                  access="public", url_ttl_seconds=3600, s3_client=None, s3_access=None,
-                 aws_env=None, now=time.time):
+                 aws_env=None, now=time.time, owns_access=True):
         self.sources = tuple(sources)
         if not 1 <= len(self.sources) <= 7:
             raise ValueError("Configure between one and seven matches")
@@ -111,10 +111,18 @@ class SourceRegistry:
             raise ValueError("Invalid AWS region")
         if access not in ("public", "presigned"):
             raise ValueError("MATCHPULSE_SOURCE_ACCESS must be public or presigned")
+        if type(owns_access) is not bool or (not owns_access and s3_access is None):
+            raise ValueError("Borrowed source access requires an explicit owner")
         number(url_ttl_seconds, "url_ttl_seconds", minimum=120, maximum=21600)
         self.bucket, self.region, self.access = bucket, region, access
         self.url_ttl_seconds, self._s3, self.now = int(url_ttl_seconds), s3_client, now
         self._access = s3_access
+        self._owns_access, self._access_reference = owns_access, False
+        if s3_access is not None and not owns_access:
+            if s3_access.region != self.region:
+                raise ValueError("Shared source access region must match the registry")
+            s3_access.retain()
+            self._access_reference = True
         credential_env = os.environ if aws_env is None else aws_env
         self._aws_env = dict(credential_env)
         self._token_provider = ((lambda: credential_env.get("MODAL_IDENTITY_TOKEN"))
@@ -127,7 +135,7 @@ class SourceRegistry:
         self.resolve_metrics = {}
 
     @classmethod
-    def from_env(cls, env=None):
+    def from_env(cls, env=None, *, s3_access=None, owns_access=True):
         env = os.environ if env is None else env
         bucket = env.get("S3_BUCKET_NAME") or VIDEO_BUCKET
         raw = env.get("MATCHPULSE_SOURCES_JSON")
@@ -160,7 +168,8 @@ class SourceRegistry:
         return cls(sources, bucket=bucket,
                    region=env.get("AWS_DEFAULT_REGION") or env.get("AWS_REGION") or VIDEO_REGION,
                    access=env.get("MATCHPULSE_SOURCE_ACCESS") or VIDEO_SOURCE_ACCESS,
-                   url_ttl_seconds=int(env.get("MATCHPULSE_SOURCE_URL_TTL", "3600")), aws_env=env)
+                   url_ttl_seconds=int(env.get("MATCHPULSE_SOURCE_URL_TTL", "3600")), aws_env=env,
+                   s3_access=s3_access, owns_access=owns_access)
 
     def resolve(self):
         started = time.perf_counter()
@@ -276,5 +285,8 @@ class SourceRegistry:
                    for source in self._resolved)
 
     def close(self):
-        if self._access is not None:
+        if self._access_reference:
+            self._access_reference = False
+            self._access.release()
+        elif self._access is not None and self._owns_access:
             self._access.close()

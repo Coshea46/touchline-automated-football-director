@@ -7,7 +7,7 @@ credential resolution happen only when a caller requests AWS access.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 import math
 import os
 import re
@@ -93,6 +93,42 @@ class S3Access:
         self._explicit_token_provider = token_provider is not None
         self._lock = RLock()
         self._session = self._client = self._sts = None
+        self._signer = self._signer_generation = None
+        self._references = 0
+        self._closing = self._closed = False
+        self._close_confirmed = False
+
+    def retain(self):
+        """Borrow this app-owned resource before starting any native work."""
+        with self._lock:
+            if self._closing or self._closed:
+                raise StorageAuthorizationError("aws_access_closed")
+            self._references += 1
+        return self
+
+    def release(self):
+        with self._lock:
+            if self._references < 1:
+                raise RuntimeError("AWS access reference was already released")
+            self._references -= 1
+            if self._closing and self._references == 0:
+                self._close_clients()
+
+    @contextmanager
+    def _operation(self):
+        with self._lock:
+            if self._closed or (self._closing and not self._references):
+                raise StorageAuthorizationError("aws_access_closed")
+            self._references += 1
+        try:
+            yield
+        finally:
+            self.release()
+
+    @property
+    def closed(self):
+        with self._lock:
+            return self._closed
 
     @staticmethod
     def _config(*, unsigned=False):
@@ -136,6 +172,8 @@ class S3Access:
 
     def _get_session(self):
         with self._lock:
+            if self._closed:
+                raise StorageAuthorizationError("aws_access_closed")
             if self._session is not None:
                 return self._session
             kwargs = {"region_name": self.region}
@@ -165,6 +203,8 @@ class S3Access:
     def get_client(self):
         """Return a reusable S3 client for explicit HEAD/GET operations."""
         with self._lock:
+            if self._closed:
+                raise StorageAuthorizationError("aws_access_closed")
             if self._client is None:
                 try:
                     self._client = self._get_session().client("s3", region_name=self.region,
@@ -198,9 +238,36 @@ class S3Access:
 
     def authorization_expiry(self):
         """Resolve/refresh credentials and return their actual expiration, if any."""
-        return self._snapshot()[1]
+        with self._operation():
+            return self._snapshot()[1]
 
     get_authorization_expiry = authorization_expiry
+
+    def _frozen_signer(self, frozen, expiry):
+        """Called under owner lock only, after the refreshable snapshot is read."""
+        generation = (frozen.access_key, frozen.secret_key, frozen.token, expiry)
+        if self._signer is None or self._signer_generation != generation:
+            signer = self._get_session().client(
+                "s3", region_name=self.region, endpoint_url=self._s3_endpoint(), config=self._config(),
+                aws_access_key_id=frozen.access_key, aws_secret_access_key=frozen.secret_key,
+                aws_session_token=frozen.token)
+            previous = self._signer
+            self._signer, self._signer_generation = signer, generation
+            if previous is not None and previous is not signer:
+                with suppress(Exception):
+                    previous.close()
+        return self._signer
+
+    def warm(self):
+        """Resolve credentials and build clients without reading/signing an object."""
+        with self._operation():
+            self.get_client()
+            # Never hold the owner lock while Botocore may refresh credentials:
+            # its refresh callback acquires this same lock in the other order.
+            frozen, expiry = self._snapshot()
+            with self._lock:
+                self._frozen_signer(frozen, expiry)
+            return expiry
 
     def presign_object(self, bucket, key, ttl_seconds=3600, *, method="get_object"):
         if method not in ("get_object", "head_object"):
@@ -211,31 +278,25 @@ class S3Access:
             raise ValueError("Invalid S3 bucket")
         if not isinstance(key, str) or not key or len(key.encode("utf-8")) > 1024:
             raise ValueError("Invalid S3 object key")
-        frozen, expiry = self._snapshot()
-        signing_client = None
-        try:
-            # Freeze the exact generation used for this URL. A concurrent SDK
-            # refresh cannot make its reported expiry belong to another token.
-            signing_client = self._get_session().client(
-                "s3", region_name=self.region, endpoint_url=self._s3_endpoint(), config=self._config(),
-                aws_access_key_id=frozen.access_key, aws_secret_access_key=frozen.secret_key,
-                aws_session_token=frozen.token)
-            now = self._now()
-            lifetime = ttl_seconds if expiry is None else min(
-                ttl_seconds, math.floor(expiry - now - self.EXPIRY_MARGIN_SECONDS))
-            if lifetime < 1:
-                raise StorageAuthorizationError("aws_credentials_expiring")
-            url = signing_client.generate_presigned_url(
-                method, Params={"Bucket": bucket, "Key": key}, ExpiresIn=lifetime)
-            return PresignedObject(url, now + lifetime, expiry, lifetime)
-        except StorageAuthorizationError:
-            raise
-        except Exception:
-            raise StorageAuthorizationError("s3_presign_failed") from None
-        finally:
-            if signing_client is not None:
-                with suppress(Exception):
-                    signing_client.close()
+        with self._operation():
+            frozen, expiry = self._snapshot()
+            try:
+                with self._lock:
+                    # Fixed-generation signer reuse is safe only while this
+                    # lock covers signing and replacement/client construction.
+                    signing_client = self._frozen_signer(frozen, expiry)
+                    now = self._now()
+                    lifetime = ttl_seconds if expiry is None else min(
+                        ttl_seconds, math.floor(expiry - now - self.EXPIRY_MARGIN_SECONDS))
+                    if lifetime < 1:
+                        raise StorageAuthorizationError("aws_credentials_expiring")
+                    url = signing_client.generate_presigned_url(
+                        method, Params={"Bucket": bucket, "Key": key}, ExpiresIn=lifetime)
+                    return PresignedObject(url, now + lifetime, expiry, lifetime)
+            except StorageAuthorizationError:
+                raise
+            except Exception:
+                raise StorageAuthorizationError("s3_presign_failed") from None
 
     def presign_get(self, bucket, key, ttl_seconds=3600):
         return self.presign_object(bucket, key, ttl_seconds, method="get_object")
@@ -243,15 +304,27 @@ class S3Access:
     def presign_head(self, bucket, key, ttl_seconds=3600):
         return self.presign_object(bucket, key, ttl_seconds, method="head_object")
 
+    def _close_clients(self):
+        failed, seen = False, set()
+        for client in (self._client, self._sts, self._signer):
+            if client is not None and id(client) not in seen:
+                seen.add(id(client))
+                try:
+                    client.close()
+                except Exception:
+                    failed = True
+        self._client = self._sts = self._session = self._signer = self._signer_generation = None
+        self._closed, self._close_confirmed = True, not failed
+        if failed:
+            raise StorageAuthorizationError("aws_client_close_failed") from None
+
     def close(self):
+        """Request owner shutdown; native borrowers release before SDK close."""
         with self._lock:
-            failed = False
-            for client in (self._client, self._sts):
-                if client is not None:
-                    try:
-                        client.close()
-                    except Exception:
-                        failed = True
-            self._client = self._sts = None
-            if failed:
-                raise StorageAuthorizationError("aws_client_close_failed") from None
+            if self._closed:
+                return self._close_confirmed
+            self._closing = True
+            if self._references:
+                return False
+            self._close_clients()
+            return True

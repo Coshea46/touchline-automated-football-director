@@ -34,7 +34,7 @@ the frozen model, raw `(75,215)` windows, seven-source assignment and source/clo
 contracts. L4 is now preferred with T4 fallback, with eight preloaded replay
 containers kept warm for two simultaneous visitors and one warm CPU API owner.
 A public browser run used three T4 workers and one L4 worker. Each
-20-minute Director run reserves $2.20, and independently admitted captions reserve
+20-minute Director run reserves $2.60 including EU placement, and independently admitted captions reserve
 $0.14. Visitors can run concurrently, with ten combined starts per IP per rolling
 hour and no cooldown, under the [hosted admission limits](modal-backend.md#configuration-and-durable-admission).
 

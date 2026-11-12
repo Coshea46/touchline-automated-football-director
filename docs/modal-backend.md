@@ -53,10 +53,13 @@ Container restarts can lose visitor replay state even though admission history
 persists. Drain active sessions before changing deployment ownership or state
 mounts.
 
-Traffic is routed through Modal's `eu-west` gateway. Container placement is left
-at the provider default; this avoids selecting a placement region with an added
-region multiplier. `AWS_DEFAULT_REGION=eu-west-2` independently identifies the
-recording bucket's AWS region.
+API traffic is routed through Modal's `eu-west` gateway, and its CPU container
+is placed in `eu-west`. Replay GPU containers use the broader `eu` placement
+region to stay near the London recordings while retaining a larger capacity
+pool. Modal's placement multipliers apply: 1.75x for the CPU's narrow region and
+1.15x for the GPU's broad region. `AWS_DEFAULT_REGION=eu-west-2` independently
+identifies the recording bucket's AWS region. The existing private GPU WebSocket
+ingress retains its original routing region.
 
 ## Configuration and durable admission
 
@@ -85,7 +88,9 @@ The policy must commit a paid reservation before permitting provider work; a
 filesystem write alone is insufficient for a volume-backed cold restart. Its
 limits and conservative handling of uncertain cleanup apply across visitors.
 Director and captions have independent 1200-second leases and controls. Director
-starts reserve $2.20 for up to four T4/L4 workers, including bounded startup and
+starts reserve $2.60 for up to four T4/L4 workers, including bounded startup and
+the GPU's 15% regional placement premium. Historical $2.20 reservations retain
+their original amounts. The reservation covers active processing and bounded
 cleanup; caption starts reserve $0.14 for focused Scribe audio. Both count toward
 ten starts per IP in a rolling hour. There is no cooldown or global active-run
 mutex. Repeated On while a component is active does not reserve again or renew
@@ -99,7 +104,7 @@ application reservation cap, with all historical charges retained. Warm GPU/API
 containers are billed independently of this per-run ledger, including while idle;
 the application cap does not stop those infrastructure charges.
 The generic code fallback remains $1.20/day and $3 total if no explicit
-funding is supplied; that fallback cannot admit a $2.20 Director run.
+funding is supplied; that fallback cannot admit a $2.60 Director run.
 Reservations are non-refundable; changing the configured allowance does not
 refund reservations or erase start counts.
 The total allowance does not reset at midnight or on a cold start. These are
@@ -178,8 +183,17 @@ exact selected temporal GRU before accepting a session. No synthetic prediction
 is used as evidence. Per-visitor readers, feature caches and playback permits stay
 independent. Private-source authorization overlaps up to four read-only S3 HEAD
 checks; fresh identity validation, credential-bound signing, ordered publication
-and cleanup remain enforced. Registry metrics record counts and elapsed times,
-without source keys or signed URLs.
+and cleanup remain enforced. The API warms one app-owned S3 access resource at
+startup. Visitors borrow its refreshable credentials and a frozen-generation
+signer, avoiding repeated STS exchanges and client construction. Every visitor
+still receives fresh object HEAD verification and correctly expiring GET/HEAD
+signatures. Borrowed native work must finish before app-owned clients can close.
+Registry metrics record counts and elapsed times without source keys or signed
+URLs. Independent video and audio containers open in parallel with joined failure
+cleanup, while seek, priming and factual playback watermark rules remain intact.
+The frontend gives the focused recording first access to network/decoder resources
+before starting untouched previews; all seven players remain mounted and any
+already-started preview remains warm.
 
 The inference deployment allows T4/L4 capacity fallback while retaining the
 frozen selected model, seven source readers, raw `(75,215)` feature windows and

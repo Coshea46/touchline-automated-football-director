@@ -123,13 +123,13 @@ def test_audio_discontinuity_never_becomes_silence(kind):
         worker.pull(5)
 
 
-def test_oversized_metadata_is_rejected_before_audio_open_or_rgb_allocation():
+def test_oversized_metadata_closes_both_parallel_headers_before_rgb_allocation():
     av = AV()
     av.video_stream.codec_context.width = 3840
     av.video_stream.codec_context.height = 2160
     with pytest.raises(MediaTimelineError, match='pixel frame limit'):
         cursor(av)
-    assert len(av.containers) == 1 and av.containers[0].closed
+    assert len(av.containers) == 2 and all(container.closed for container in av.containers)
     assert all(frame.converted == 0 for frame in av.video)
 
 

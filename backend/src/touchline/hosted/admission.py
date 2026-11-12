@@ -30,9 +30,10 @@ class AdmissionDenied(RuntimeError):
 class AdmissionPolicy:
     AI_SECONDS = 1200
     # Independent, non-refundable component starts. Four worst-case L4 workers
-    # cost at most $2.1087072 for 1200+330 seconds; Scribe 1200 seconds costs $.13.
+    # cost $2.1087072 base for 1200+330 seconds, plus 15% EU placement. Scribe
+    # 1200 seconds costs $.13; standing warm-pool billing is separate.
     # Historical .60/.70 combined reservations retain their exact stored values.
-    AI_RESERVATION_USD = 2.20
+    AI_RESERVATION_USD = 2.60
     CAPTION_RESERVATION_USD = .14
     MAX_STARTS_PER_HOUR = 10
     # Retain uncertain leases beyond the GPU's duration + startup/cleanup bounds.

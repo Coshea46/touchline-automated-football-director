@@ -14,7 +14,7 @@ function ready(video) {
 
 const nativePlayer = (id) => document.querySelector(`[data-feed-id="${id}"] video`);
 
-test('opens seven full-source players with one focused and six selectable previews', () => {
+test('prioritizes the focused decoder before starting six previews on the same seven mounted players', () => {
   render(<App />);
   const main = screen.getByLabelText(`${FEEDS[0].label} video`);
   expect(main).toHaveAttribute('src', getVideoUrl(FEEDS[0]));
@@ -22,11 +22,33 @@ test('opens seven full-source players with one focused and six selectable previe
   const strip = screen.getByRole('region', { name: 'Other matches' });
   expect(within(strip).getAllByRole('button')).toHaveLength(6);
   expect(strip.querySelectorAll('video')).toHaveLength(7);
+  const nodes = [...strip.querySelectorAll('video')];
+  nodes.slice(1).forEach((video) => expect(video).not.toHaveAttribute('src'));
+  Object.defineProperty(main, 'readyState', { configurable: true, value: 1 });
+  fireEvent.loadedMetadata(main);
+  nodes.slice(1).forEach((video) => expect(video).not.toHaveAttribute('src'));
+  ready(main);
   strip.querySelectorAll('video').forEach((video, i) => {
+    expect(video).toBe(nodes[i]);
     expect(video).toHaveAttribute('src', getVideoUrl(FEEDS[i]));
   });
   expect(getVideoUrl(FEEDS[0])).toMatch(/\/match-1\.mp4$/);
   expect(getPreviewUrl(FEEDS[6])).toMatch(/\/match-7-preview-v1\.mp4$/);
+});
+
+test('a new focus loads immediately before initial readiness while already started decoders stay loaded', () => {
+  const { container } = render(<App />);
+  const nodes = [...container.querySelectorAll('video')];
+  fireEvent.click(screen.getByRole('button', { name: FEEDS[2].label }));
+  expect(screen.getByLabelText(`${FEEDS[2].label} video`)).toBe(nodes[2]);
+  expect(nodes[0]).toHaveAttribute('src', getVideoUrl(FEEDS[0]));
+  expect(nodes[2]).toHaveAttribute('src', getVideoUrl(FEEDS[2]));
+  [1, 3, 4, 5, 6].forEach((index) => expect(nodes[index]).not.toHaveAttribute('src'));
+  ready(nodes[2]);
+  nodes.forEach((node, index) => {
+    expect(container.querySelectorAll('video')[index]).toBe(node);
+    expect(node).toHaveAttribute('src', getVideoUrl(FEEDS[index]));
+  });
 });
 
 test('switching promotes the existing destination video without replacing any player', () => {
