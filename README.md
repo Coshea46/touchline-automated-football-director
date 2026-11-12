@@ -9,8 +9,10 @@ Our hackathon demo replays seven prerecorded Premier League broadcasts. The vide
 > **Demo note:** These are prerecorded matches, not live broadcasts. Our prediction model is experimental. Model scores are relative rankings, **not** calibrated probabilities of a goal.
 
 [Open the public demo](https://touchline-football-director.vercel.app). Each visitor
-gets an independent replay starting at 00:00:00. Auto and captions start off;
-paid AI is rate limited and subject to a small total allowance. Automatic
+gets an independent replay starting at 00:00:00. Auto starts on and captions
+start off; each has an independent control and a 20-minute run limit. Up to ten
+Director or caption starts per IP are allowed each hour, with no cooldown.
+Visitors can use AI concurrently, subject to the shared spending allowance. Automatic
 switching and captions have been observed in the deployed browser, while
 sustained seven-source scoring remains unverified in that joined path. See the
 [deployment verification record](docs/modal-backend.md#frontend-connection-and-verification).

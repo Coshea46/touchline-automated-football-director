@@ -79,6 +79,8 @@ class ReplaySession:
         self._last_ack_sequence = None
         self._unplayable = set()
         self._reserved_compute_usd = 0.0
+        self._director_stop_confirmed = True
+        self._director_stopping = False
         self._selection_pending_until = 0.0
         if prepared_config is not None and (not isinstance(prepared_config, SessionConfig)
                 or not prepared_config.monitor or prepared_config.mode != 'real'
@@ -525,28 +527,34 @@ class ReplaySession:
         return await self.monitoring._score_loop()
 
     def start(self):
-        if not self._tasks:
-            self._caption_loop_owner = asyncio.get_running_loop()
-            self._tasks = [asyncio.create_task(self._control_loop(), name="replay-control"),
-                           asyncio.create_task(self._score_loop(), name="replay-scores")]
-            if self.caption_worker is not None:
-                try:
-                    self.caption_worker.start()
-                    self._tasks.append(asyncio.create_task(self._caption_loop(), name="replay-captions"))
-                except Exception:  # noqa: BLE001
-                    self.caption_worker = None
-                    self._caption_enabled = False
-                    self._caption_status, self._caption_reason = "unavailable", "runtime_unavailable"
+        self._tasks = [task for task in self._tasks if not task.done()]
+        names = {task.get_name() for task in self._tasks}
+        self._caption_loop_owner = asyncio.get_running_loop()
+        if not self._director_stopping and "replay-control" not in names:
+            self._tasks.append(asyncio.create_task(self._control_loop(), name="replay-control"))
+        if not self._director_stopping and "replay-scores" not in names:
+            self._tasks.append(asyncio.create_task(self._score_loop(), name="replay-scores"))
+        if self.caption_worker is not None and "replay-captions" not in names:
+            try:
+                self.caption_worker.start()
+                self._tasks.append(asyncio.create_task(self._caption_loop(), name="replay-captions"))
+            except Exception:  # noqa: BLE001
+                self.caption_worker = None
+                self._caption_enabled = False
+                self._caption_status, self._caption_reason = "unavailable", "runtime_unavailable"
 
-    async def _close_paid_work(self, reason):
+    async def _close_paid_work(self, reason, *, stop_captions=True):
         """Drain owned submissions before declaring paid work stopped."""
-        self._caption_enabled = False
-        self._caption_revoke(reason, status="stopped")
-        for task in self._tasks:
+        if stop_captions:
+            self._caption_enabled = False
+            self._caption_revoke(reason, status="stopped")
+        stopping = [task for task in self._tasks
+                    if stop_captions or task.get_name() != "replay-captions"]
+        for task in stopping:
             task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
-        if self.caption_worker is not None:
+        await asyncio.gather(*stopping, return_exceptions=True)
+        self._tasks = [task for task in self._tasks if task not in stopping]
+        if stop_captions and self.caption_worker is not None:
             try:
                 confirmed = await asyncio.wait_for(asyncio.to_thread(self.caption_worker.close), timeout=4)
             except Exception:  # noqa: BLE001 - close failures remain sanitized and bounded
@@ -563,29 +571,69 @@ class ReplaySession:
                     if not task.cancelled() and task.exception() is None:
                         asyncio.create_task(asyncio.to_thread(self.bridge.stop, self.session_id, task.result()))
                 self._start_inflight.add_done_callback(cancel_late)
+                self.metrics["shutdown_sdk_thread_may_remain"] = True
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Inference submission ended during shutdown (%s)", type(exc).__name__)
             self._start_inflight = None
         await self._stop_worker()
 
-    async def stop_monitoring(self, reason="monitoring_stopped"):
-        """Irrevocably finish paid work while keeping manual playback available."""
+    async def stop_monitoring(self, reason="monitoring_stopped", *, stop_captions=True,
+                              preserve_prepared=False):
+        """Stop owned monitoring; optionally retain independent captions/preparation."""
+        self._director_stop_confirmed = False
+        self._director_stopping = True
         self._start_authorized = self._activation_requested = False
         self._finished, self._finished_reason = True, reason
         self._stop_requested = True
         self.director.set_auto(False)
-        await self._close_paid_work(reason)
-        self.caption_worker = None
-        self._prepared_config = None
+        await self._close_paid_work(reason, stop_captions=stop_captions)
+        if stop_captions:
+            self.caption_worker = None
+        if not preserve_prepared:
+            self._prepared_config = None
         self.config = SessionConfig(max_restarts=0)
         self._set_state("stopped", reason)
+        self._director_stopping = False
         if not self._closing:
             self.start()  # Disabled control loop still renews source URLs.
-        return (self._start_inflight is None and self._handle is None
+        confirmed = (self._start_inflight is None and self._handle is None
                 and self._stopping_handle is None
                 and self.metrics.get("worker_stop_succeeded", self._reserved_compute_usd == 0) is True
-                and self.metrics.get("caption_stop_confirmed", True) is True
+                and (not stop_captions or self.metrics.get("caption_stop_confirmed", True) is True)
                 and not self.metrics.get("shutdown_sdk_thread_may_remain", False))
+        self._director_stop_confirmed = confirmed
+        self.metrics["director_stop_confirmed"] = confirmed
+        return confirmed
+
+    def reset_director_run(self):
+        """Prepare local state after a fresh durable grant; never create/start a worker.
+
+        Admission belongs to the caller. A failed/uncertain owned stop must be
+        reconciled before that caller can reset an existing run's allowance.
+        Caption intent, worker, generation, deadline and the media clock survive.
+        """
+        if (self._closing or self._closed or self._director_stopping or self._prepared_config is None
+                or self.config.monitor or self._handle is not None or self._stopping_handle is not None
+                or self._start_inflight is not None or self._activation_inflight
+                or self._activation_requested or self._start_authorized
+                or not self._director_stop_confirmed
+                or self.metrics.get("shutdown_sdk_thread_may_remain", False)):
+            raise RuntimeError("Director run requires prepared configuration and confirmed idle cleanup")
+        self.config = SessionConfig(max_restarts=0)
+        self._monitor_started_at = self._ready_at = self._paused_at = None
+        self._reserved_compute_usd = 0.0
+        self.metrics["reserved_compute_usd"] = 0.0
+        self._restarts, self._retry_at = 0, 0.0
+        self._finished, self._finished_reason = False, "session_limit_reached"
+        self._worker_ready = self._stop_requested = self._restart_after_seek = False
+        self._sources_changed = True
+        self._last_recommendation = self._last_ack_sequence = None
+        self._selection_pending_until = 0.0
+        self.director.mode, self.director.model_version = self.config.mode, self.config.model_version
+        self.director.reset(self.clock_epoch)
+        self._model_health = dict.fromkeys(self.director.match_ids, True)
+        self.director.healthy = {match_id: match_id not in self._unplayable for match_id in self.director.match_ids}
+        self._set_state("disabled")
 
     async def close(self):
         if self._closed:

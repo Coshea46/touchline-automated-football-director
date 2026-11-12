@@ -29,11 +29,13 @@ class Admission:
     async def allow_http(self, peer):
         self.http.append(peer)
 
-    async def acquire_ai(self, session_id, peer):
+    async def acquire_ai(self, session_id, peer, *, component="director"):
         if self.denial:
             raise AdmissionDenied(self.denial, 12)
-        self.acquired.append((session_id, peer))
-        return {"duration_seconds": 120, "reserved_usd": .70}
+        permit_id = f"permit-{len(self.acquired)}"
+        self.acquired.append((session_id, peer, component))
+        return {"permit_id": permit_id, "duration_seconds": 1200,
+                "reserved_usd": 2.20 if component == "director" else .14}
 
     async def release_ai(self, session_id, confirmed=False):
         self.released.append((session_id, confirmed))
@@ -62,15 +64,22 @@ class Factory:
     async def __call__(self, session_id, guard):
         bridge, worker = FakeBridge(), CaptionWorker()
         registry = SourceRegistry([MatchSource("cam-1", "Synthetic recording",
-            source_url="https://recordings.invalid/synthetic.mp4")])
+            source_url="https://recordings.invalid/synthetic.mp4", key="synthetic.mp4",
+            identity={"digest": "a" * 64})])
         prepared = SessionConfig(monitor=True, mode="real", model_version=NEW_MODEL_VERSION,
-            checkpoint=NEW_MODEL_VERSION, max_duration_seconds=120,
-            max_estimated_cost_usd=.70, max_restarts=0, gpu_workers=1)
+            checkpoint=NEW_MODEL_VERSION, max_duration_seconds=1200,
+            max_estimated_cost_usd=2.20, max_restarts=0, gpu_workers=1)
         session = await ReplaySession(registry, session_id=session_id,
             prepared_config=prepared, bridge_factory=lambda: bridge,
-            caption_worker=worker, activation_guard=guard,
+            caption_worker=worker, caption_max_audio_seconds=1200,
+            caption_max_cost_usd=.14, activation_guard=guard,
             now=self.clock, monotonic=self.clock).initialize()
         session._caption_user_enabled = session._caption_enabled = False
+        def caption_factory():
+            replacement = CaptionWorker()
+            self.workers.append(replacement)
+            return replacement
+        session._hosted_caption_factory = caption_factory
         self.sessions.append(session)
         self.bridges.append(bridge)
         self.workers.append(worker)

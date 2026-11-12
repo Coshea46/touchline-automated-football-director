@@ -16,12 +16,14 @@ def test_visitors_have_distinct_zero_clocks_and_cannot_control_another_session()
         a, b = Connection(), Connection()
         try:
             first, auth = await manager.attach({"type": "hello"}, "peer-a", a)
+            assert first.session.director.auto_enabled and not first.ai_active
+            await manager.receive(first, a, {"type": "auto", "session_id": auth["session_id"], "enabled": False})
             await manager.receive(first, a, playback(first.session, position=41))
             second, other = await manager.attach({"type": "hello"}, "peer-b", b)
             assert auth["session_id"] != other["session_id"]
             assert auth["resume_token"] != other["resume_token"]
             assert first.session.position == 41 and second.session.position == 0
-            assert not second.session.director.auto_enabled and not second.session._caption_enabled
+            assert second.session.director.auto_enabled and not second.ai_active and not second.session._caption_enabled
             error = await manager.receive(second, b, playback(first.session, position=100))
             assert error["code"] == "session_mismatch" and first.session.position == 41
             first.session._publish_session()
@@ -40,6 +42,7 @@ def test_resume_preserves_position_but_invalid_or_partial_capabilities_never_cre
         original, resumed = Connection(), Connection()
         try:
             visitor, auth = await manager.attach({"type": "hello"}, "peer-a", original)
+            await manager.receive(visitor, original, {"type": "auto", "session_id": auth["session_id"], "enabled": False})
             await manager.receive(visitor, original, playback(visitor.session, position=57.5))
             manager.detach(visitor, original)
             for hello, code in [({"type": "hello", "session_id": auth["session_id"]}, "resume_rejected"),

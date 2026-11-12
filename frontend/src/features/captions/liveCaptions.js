@@ -5,9 +5,10 @@ export const captionSessionEnded = (value) => ['session_closed', 'all_sources_en
 
 export function liveCaptionStatus(value, connected = true, canControl = true) {
   const reason = value?.reason || value?.status;
-  if (['ai_required', 'ai_not_active', 'awaiting_start'].includes(reason)) return 'Turn Auto On to start the bounded AI demo before enabling live captions.';
-  if (reason === 'ai_finished') return 'The AI demo has ended. Live captions have stopped.';
-  if (reason === 'ai_busy') return 'The AI demo is busy with another viewer. Live captions are unavailable right now.';
+  if (value?.controlRejected && reason === 'rate_limited') return `Start limit reached: up to 10 Director or caption starts per hour.${Number.isFinite(value.retry_after) && value.retry_after > 0 ? ` The server requested a wait of ${Math.ceil(value.retry_after)} seconds.` : ''}`;
+  if (['ai_required', 'ai_not_active', 'awaiting_start'].includes(reason)) return 'Live captions are off. Start captions with their own control.';
+  if (reason === 'ai_finished') return 'The live caption run has ended. You can start another run.';
+  if (reason === 'ai_busy') return 'Your previous caption run is still stopping. Please try again shortly.';
   if (['auth_error', 'provider_permission_speech_to_text_missing'].includes(reason)) return 'ElevenLabs could not authorize live captions. Ask the demo operator to check Speech to Text access.';
   if (reason === 'feature_disabled') return 'Live captions are disabled for this demo.';
   if (reason === 'missing_key') return 'The site operator needs to connect ElevenLabs before live captions are available.';

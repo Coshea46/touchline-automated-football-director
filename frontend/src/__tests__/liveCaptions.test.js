@@ -133,7 +133,7 @@ test('disconnect clears text and reconnect resumes authoritative On without an e
   expect(screen.getByRole('button', { name: /Commentary captions On/ })).toBeInTheDocument();
 });
 
-test('new sessions default On independently of an old local Off preference', () => {
+test('authoritative server On intent overrides an old local Off preference without an enable command', () => {
   localStorage.setItem('matchpulse-captions-enabled', 'false'); const { socket, receive } = join();
   expect(screen.getByRole('button', { name: /Commentary captions On/ })).toBeInTheDocument();
   expect(socket.sent.filter((item) => item.type === 'captions' && item.enabled)).toHaveLength(0);
@@ -142,6 +142,17 @@ test('new sessions default On independently of an old local Off preference', () 
   receive(baseSession({ session_id: 'new-live-session' }));
   expect(screen.getByRole('button', { name: /Commentary captions On/ })).toBeInTheDocument();
   expect(socket.sent.filter((item) => item.type === 'captions' && item.session_id === 'new-live-session')).toHaveLength(0);
+});
+
+test('captions start Off before a session and an old local On preference cannot enable a fresh server-Off session', () => {
+  localStorage.setItem('matchpulse-captions-enabled', 'true');
+  render(<App />);
+  expect(screen.getByRole('button', { name: /Commentary captions Off/ })).toBeInTheDocument();
+  const socket = global.FakeWebSocket.instances.at(-1);
+  act(() => { socket.open(); socket.receive(baseSession({ captions: { ...baseSession().captions,
+    user_enabled: false, enabled: false, status: 'off' } })); });
+  expect(screen.getByRole('button', { name: /Commentary captions Off/ })).toBeInTheDocument();
+  expect(socket.sent.filter((item) => item.type === 'captions')).toEqual([]);
 });
 
 test('Off stays Off through pending state, source changes and further snapshots without automatic enable commands', () => {
@@ -181,6 +192,7 @@ test('an explicit offline Off is replayed once on the same session instead of lo
 
 test('Off chosen before the first session reaches the server before actual playback can start captions', () => {
   render(<App />); const socket = global.FakeWebSocket.instances.at(-1);
+  fireEvent.click(screen.getByRole('button', { name: /Commentary captions Off/ }));
   fireEvent.click(screen.getByRole('button', { name: /Commentary captions On/ }));
   act(() => { socket.open(); socket.receive(baseSession()); });
   expect(screen.getByRole('button', { name: /Commentary captions Off/ })).toBeInTheDocument();

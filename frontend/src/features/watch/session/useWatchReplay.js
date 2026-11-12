@@ -7,7 +7,7 @@ import useAudioOwnership from '../audio/useAudioOwnership';
 import usePlayerHandoff from '../playback/usePlayerHandoff';
 import useDirectorControls from '../director/useDirectorControls';
 import directorViewState from '../director/directorViewState';
-import useVisitorSession, { INDEPENDENT_SESSIONS } from './useVisitorSession';
+import useVisitorSession from './useVisitorSession';
 
 export const MANUAL_HOLD_MS = 30000;
 
@@ -25,7 +25,7 @@ export default function useWatchReplay(activePage) {
   const [uiNow, setUiNow] = useState(Date.now());
   const [focusedId, setFocusedId] = useState(FEEDS[0].id);
   const [previewsPaused, setPreviewsPaused] = useState(false);
-  const [autoSwitch, setAutoSwitch] = useState(!INDEPENDENT_SESSIONS);
+  const [autoSwitch, setAutoSwitch] = useState(true);
   const [holdUntil, setHoldUntil] = useState(0);
   const [seekTo, setSeekTo] = useState(null);
   const [announcement, setAnnouncement] = useState('');
@@ -291,15 +291,17 @@ export default function useWatchReplay(activePage) {
       pendingModeRef.current = null;
       setPendingMode(null);
       setModeNotice('That mode could not be applied. The current settings are unchanged.');
-    } else if (visitor.enabled && message.type === 'error' && message.code === 'ai_required') {
-      captions.onControlRejected('ai_required');
-    } else if (visitor.enabled && message.type === 'error' && ['ai_busy', 'rate_limited', 'budget_exhausted', 'ai_finished', 'server_unavailable'].includes(message.code)) {
-      const notices = { ai_busy: 'Auto Director is busy with another viewer. You can keep choosing matches.',
-        rate_limited: 'The AI demo is limited right now. You can keep choosing matches.',
-        budget_exhausted: 'The AI demo allowance has been used. Manual viewing is still available.',
-        ai_finished: 'Your AI demo has ended. You can keep choosing matches.',
-        server_unavailable: 'The AI demo is unavailable right now. You can keep choosing matches.' };
-      setAiNotice(notices[message.code]);
+    } else if (visitor.enabled && message.type === 'error' && message.feature === 'captions') {
+      captions.onControlRejected(message.code, message.retry_after);
+    } else if (visitor.enabled && message.type === 'error' && message.feature === 'director') {
+      const notices = { ai_busy: 'Your previous Director run is still stopping. Please try again shortly.',
+        rate_limited: 'Start limit reached: up to 10 Director or caption starts per hour.',
+        budget_exhausted: 'The Director allowance is currently unavailable. Manual viewing is still available.',
+        ai_finished: 'Your Director run has ended. You can start another run when ready.',
+        server_unavailable: 'Auto Director is unavailable right now. You can keep choosing matches.' };
+      const retry = Number.isFinite(message.retry_after) && message.retry_after > 0
+        ? ` The server requested a wait of ${Math.ceil(message.retry_after)} seconds.` : '';
+      setAiNotice((notices[message.code] || 'Auto Director could not start. You can keep choosing matches.') + retry);
       autoRef.current = false; setAutoSwitch(false);
       dirtyControls.current.auto = false;
     }
@@ -333,21 +335,21 @@ export default function useWatchReplay(activePage) {
     session.current = null; synced.current = false;
     delete clock.current.sample;
     Object.assign(clock.current, { time: 0, playing: true, rate: 1, stalled: true, available: false, ended: false });
-    autoRef.current = false; holdRef.current = 0;
+    autoRef.current = true; holdRef.current = 0;
     dirtyControls.current = { auto: false, select: false };
     pendingSelection.current = null; pendingAck.current = null; latestRecommendation.current = null;
     pendingClaim.current = null; roleConfirmed.current = false; unavailable.current.clear();
     directorRef.current = null; pendingModeRef.current = null; modeRequestSession.current = null;
     setSessionState(null); setDirector(null); setPendingMode(null); setModeNotice('');
     setHoldUntil(0); setClaimPending(false); setControlNotice(''); setBackendError(''); setAiNotice('');
-    setAutoSwitch(false); setAudioEnabled(false); setPreviewsPaused(false);
+    setAutoSwitch(true); setAudioEnabled(false); setPreviewsPaused(false);
     setSeekTo({ time: 0 }); setFocusedId(feedsRef.current[0].id);
     visitor.restart();
   };
 
   const toggleAuto = () => {
     if (!autoToggleable) return;
-    const enabled = autoCanStart ? true : !autoRef.current;
+    const enabled = visitor.enabled ? !autoRef.current : autoCanStart ? true : !autoRef.current;
     if (!enabled) {
       transition.current += 1;
       pendingSelection.current = null;

@@ -1,12 +1,16 @@
+"""Durable independent component admission; no provider work is performed."""
+
 import asyncio
 from datetime import datetime, timezone
-from pathlib import Path
 import sqlite3
 import threading
 
 import pytest
 
 from touchline.hosted.admission import AdmissionDenied, AdmissionPolicy
+
+
+FUNDED = {"TOUCHLINE_AI_DAILY_BUDGET_USD": "100", "TOUCHLINE_AI_TOTAL_BUDGET_USD": "100"}
 
 
 def test_creation_quota_persists_and_does_not_store_raw_addresses(tmp_path):
@@ -23,134 +27,229 @@ def test_creation_quota_persists_and_does_not_store_raw_addresses(tmp_path):
     asyncio.run(case())
 
 
-def test_simultaneous_ai_requests_grant_only_one_and_persist_before_return(tmp_path):
+def test_twenty_minute_component_reservations_cover_costs_and_funding_defaults_are_unchanged(tmp_path):
+    from touchline.ml_inference.streaming.contract import MAX_WORKER_RATE
+    from touchline.captions.limits import LIVE_PRICE_PER_HOUR_USD
+    assert AdmissionPolicy.AI_SECONDS == 1200
+    assert (1200 + 330) * 4 * MAX_WORKER_RATE == pytest.approx(2.1087072)
+    assert (1200 + 330) * 4 * MAX_WORKER_RATE <= AdmissionPolicy.AI_RESERVATION_USD == 2.20
+    assert 1200 * LIVE_PRICE_PER_HOUR_USD / 3600 <= AdmissionPolicy.CAPTION_RESERVATION_USD == .14
+    async def case():
+        policy = AdmissionPolicy(tmp_path / "db", env={})
+        assert policy.daily_budget == 1.20 and policy.total_budget == 3
+        with pytest.raises(AdmissionDenied, match="ai_daily_limit"):
+            await policy.acquire_ai("director", "peer")
+        lease = await policy.acquire_ai("captions", "peer", component="captions")
+        assert lease["reserved_usd"] == .14 and lease["duration_seconds"] == 1200
+    asyncio.run(case())
+
+
+def test_parallel_visitors_both_start_and_each_commits_before_return(tmp_path):
     async def case():
         commits = []
-        policy = AdmissionPolicy(tmp_path / "db", commit=lambda: commits.append("committed"))
-        results = await asyncio.gather(policy.acquire_ai("a", "peer-a"),
-                                       policy.acquire_ai("b", "peer-b"), return_exceptions=True)
+        policy = AdmissionPolicy(tmp_path / "db", env=FUNDED, now=lambda: 10000,
+                                 commit=lambda: commits.append("committed"))
+        leases = await asyncio.gather(policy.acquire_ai("a", "peer-a"), policy.acquire_ai("b", "peer-b"))
+        assert commits == ["committed", "committed"]
+        assert len({lease["permit_id"] for lease in leases}) == 2
+        assert all(lease["duration_seconds"] == 1200 and lease["reserved_usd"] == 2.20
+                   and lease["expires_at"] == 11200 and lease["component"] == "director" for lease in leases)
+    asyncio.run(case())
+
+
+def test_parallel_budget_reservations_are_atomic_even_across_policy_instances(tmp_path):
+    async def case():
+        path = tmp_path / "db"
+        env = {"TOUCHLINE_AI_DAILY_BUDGET_USD": "2.20", "TOUCHLINE_AI_TOTAL_BUDGET_USD": "2.20"}
+        first, second = AdmissionPolicy(path, env=env), AdmissionPolicy(path, env=env)
+        results = await asyncio.gather(first.acquire_ai("a", "peer-a"), second.acquire_ai("b", "peer-b"),
+                                       return_exceptions=True)
         assert sum(isinstance(result, dict) for result in results) == 1
-        assert sum(isinstance(result, AdmissionDenied) and result.code == "ai_busy" for result in results) == 1
-        assert commits == ["committed"]
+        assert sum(isinstance(result, AdmissionDenied) and result.code == "ai_budget_exhausted" for result in results) == 1
+        with first._connect() as db:
+            assert db.execute("SELECT COUNT(*),SUM(amount) FROM permits").fetchone() == (1, 2.20)
+            assert db.execute("SELECT COUNT(*) FROM permit_components").fetchone()[0] == 1
     asyncio.run(case())
 
 
-def test_release_does_not_refund_or_allow_reuse_and_restart_cannot_reset_budget(tmp_path):
+def test_open_component_blocks_only_its_owner_and_confirmed_release_can_restart_without_cooldown(tmp_path):
     async def case():
-        path = tmp_path / "db"
-        policy = AdmissionPolicy(path)
-        lease = await policy.acquire_ai("a", "p-a")
-        assert lease["reserved_usd"] == .70 and lease["duration_seconds"] == 120
-        await policy.release_ai("a", confirmed=True)
-        with pytest.raises(AdmissionDenied, match="ai_session_used"):
-            await policy.acquire_ai("a", "p-a")
-        restored = AdmissionPolicy(path)
-        with pytest.raises(AdmissionDenied, match="ai_daily_limit"):
-            await restored.acquire_ai("b", "p-b")
-        unrestricted_day = AdmissionPolicy(path, env={"TOUCHLINE_AI_DAILY_BUDGET_USD": "3",
-                                                    "TOUCHLINE_AI_TOTAL_BUDGET_USD": ".7"})
-        with pytest.raises(AdmissionDenied, match="ai_budget_exhausted"):
-            await unrestricted_day.acquire_ai("b", "p-b")
-    asyncio.run(case())
-
-
-def test_default_total_ceiling_covers_four_new_reservations_without_refunds(tmp_path):
-    async def case():
-        policy = AdmissionPolicy(tmp_path / "db", env={"TOUCHLINE_AI_DAILY_BUDGET_USD": "3.00"})
-        assert policy.total_budget == 3 and policy.AI_RESERVATION_USD == .70
-        for index in range(4):
-            lease = await policy.acquire_ai(f"session-{index}", f"peer-{index}")
-            assert lease["reserved_usd"] == .70
-            await policy.release_ai(f"session-{index}", confirmed=True)
-        with pytest.raises(AdmissionDenied, match="ai_budget_exhausted"):
-            await policy.acquire_ai("fifth-session", "fifth-peer")
+        policy = AdmissionPolicy(tmp_path / "db", env=FUNDED)
+        director = await policy.acquire_ai("visitor", "same-peer")
+        captions = await policy.acquire_ai("visitor", "same-peer", component="captions")
+        other = await policy.acquire_ai("other", "other-peer")
+        with pytest.raises(AdmissionDenied, match="ai_busy"):
+            await policy.acquire_ai("visitor", "same-peer")
+        await policy.release_ai(director["permit_id"], confirmed=True)
+        restarted = await policy.acquire_ai("visitor", "same-peer")
+        assert restarted["permit_id"] not in {lease["permit_id"] for lease in (director, captions, other)}
         with policy._connect() as db:
-            assert db.execute("SELECT COUNT(*), SUM(amount), SUM(closed) FROM permits").fetchone() == (
-                4, pytest.approx(2.8), 4)
+            rows = dict(db.execute("SELECT session,closed FROM permits"))
+            assert rows[director["permit_id"]] == 1
+            assert all(rows[lease["permit_id"]] == 0 for lease in (captions, other, restarted))
+            assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(6.74)
     asyncio.run(case())
 
 
-def test_mixed_historical_and_new_reservations_preserve_actual_charges_and_all_existing_rows(tmp_path):
-    async def case():
-        path, now = tmp_path / "db", 10000.0
-        policy = AdmissionPolicy(path, env={}, now=lambda: now)
-        day = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
-        historical = [("old-a", "old-peer-a", now - 3601, day, .60, now - 3000, 1),
-                      ("old-b", "old-peer-b", now - 3601, day, .60, now - 3000, 1)]
-        connection = sqlite3.connect(path)
-        try:
-            with connection:
-                connection.executemany("INSERT INTO permits VALUES (?,?,?,?,?,?,?)", historical)
-                connection.execute("INSERT INTO creations VALUES (?,?)", ("old-creation-peer", now - 10))
-            settings = connection.execute("SELECT * FROM settings ORDER BY name").fetchall()
-            creations = connection.execute("SELECT * FROM creations").fetchall()
-        finally:
-            connection.close()
-        # Historical 1.20 is still charged in full: the default daily ceiling
-        # cannot admit a new .70 reservation and no migration changes old rows.
-        with pytest.raises(AdmissionDenied, match="ai_daily_limit"):
-            await policy.acquire_ai("new-default", "new-peer")
-        production = AdmissionPolicy(path, env={"TOUCHLINE_AI_DAILY_BUDGET_USD": "2.00"}, now=lambda: now)
-        assert (await production.acquire_ai("new-production", "new-peer"))["reserved_usd"] == .70
-        await production.release_ai("new-production", confirmed=True)
-        with pytest.raises(AdmissionDenied, match="ai_daily_limit"):
-            await production.acquire_ai("daily-overflow", "other-peer")
-        with production._connect() as db:
-            assert db.execute("SELECT * FROM permits WHERE session LIKE 'old-%' ORDER BY session").fetchall() == historical
-            assert db.execute("SELECT * FROM settings ORDER BY name").fetchall() == settings
-            assert db.execute("SELECT * FROM creations").fetchall() == creations
-            assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(1.90)
-        # A future UTC day renews only its daily allowance. The unchanged $3.00
-        # lifetime ceiling leaves $1.10, admitting one more .70 and then stopping.
-        future = AdmissionPolicy(path, env={"TOUCHLINE_AI_DAILY_BUDGET_USD": "2.00"}, now=lambda: now + 86400)
-        await future.acquire_ai("future-one", "future-peer")
-        await future.release_ai("future-one", confirmed=True)
-        with pytest.raises(AdmissionDenied, match="ai_budget_exhausted"):
-            await future.acquire_ai("future-overflow", "last-peer")
-        with future._connect() as db:
-            assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(2.60)
-    asyncio.run(case())
-
-
-def test_uncertain_cleanup_is_not_released_by_timeout_or_restart(tmp_path):
+def test_uncertain_cleanup_survives_restart_without_globally_blocking_other_components_or_visitors(tmp_path):
     async def case():
         path = tmp_path / "db"
-        policy = AdmissionPolicy(path, now=lambda: 10000)
-        await policy.acquire_ai("a", "p-a")
-        await policy.release_ai("a", confirmed=False)
-        restored = AdmissionPolicy(path, now=lambda: 20000)
+        policy = AdmissionPolicy(path, env=FUNDED, now=lambda: 10000)
+        first = await policy.acquire_ai("visitor", "peer")
+        await policy.release_ai(first["permit_id"], confirmed=False)
+        restored = AdmissionPolicy(path, env=FUNDED, now=lambda: 20000)
         with pytest.raises(AdmissionDenied, match="ai_cleanup_pending"):
-            await restored.acquire_ai("b", "p-b")
+            await restored.acquire_ai("visitor", "peer")
+        await restored.acquire_ai("visitor", "peer", component="captions")
+        await restored.acquire_ai("other", "other-peer")
+        await restored.release_ai(first["permit_id"], confirmed=True)
+        await restored.acquire_ai("visitor", "peer")
     asyncio.run(case())
 
 
-def test_one_ip_cannot_restart_ai_using_new_session(tmp_path):
+def test_exactly_ten_director_or_caption_starts_share_one_ip_rolling_hour_without_cooldown(tmp_path):
     async def case():
-        policy = AdmissionPolicy(tmp_path / "db")
-        await policy.acquire_ai("a", "same-peer")
-        await policy.release_ai("a", confirmed=True)
+        now = [10000.0]
+        policy = AdmissionPolicy(tmp_path / "db", env=FUNDED, now=lambda: now[0])
+        for index in range(10):
+            lease = await policy.acquire_ai("visitor", "peer", component="director" if index % 2 else "captions")
+            await policy.release_ai(lease["permit_id"], confirmed=True)
+            now[0] += 1
+        with pytest.raises(AdmissionDenied, match="ai_rate_limited") as caught:
+            await policy.acquire_ai("new-visitor", "peer")
+        assert caught.value.retry_after == 3590
+        await policy.acquire_ai("different-visitor", "different-peer")
+        restored = AdmissionPolicy(policy._path, env=FUNDED, now=lambda: 13600.0)
+        await restored.acquire_ai("visitor", "peer")
         with pytest.raises(AdmissionDenied, match="ai_rate_limited"):
-            await policy.acquire_ai("b", "same-peer")
+            await restored.acquire_ai("another", "peer", component="captions")
     asyncio.run(case())
 
 
-def test_failed_durable_commit_fails_closed_and_keeps_reservation(tmp_path):
+def test_concurrent_tenth_start_is_atomic_across_policy_instances(tmp_path):
+    async def case():
+        path = tmp_path / "db"
+        first = AdmissionPolicy(path, env=FUNDED, now=lambda: 10000)
+        for _ in range(9):
+            lease = await first.acquire_ai("historical-visitor", "same-peer", component="captions")
+            await first.release_ai(lease["permit_id"], confirmed=True)
+        second = AdmissionPolicy(path, env=FUNDED, now=lambda: 10000)
+        results = await asyncio.gather(first.acquire_ai("visitor-a", "same-peer"),
+            second.acquire_ai("visitor-b", "same-peer", component="captions"), return_exceptions=True)
+        assert sum(isinstance(result, dict) for result in results) == 1
+        assert sum(isinstance(result, AdmissionDenied) and result.code == "ai_rate_limited" for result in results) == 1
+        with first._connect() as db:
+            assert db.execute("SELECT COUNT(*) FROM permits WHERE peer='same-peer'").fetchone()[0] == 10
+    asyncio.run(case())
+
+
+def test_historical_schema_rows_salt_and_creations_survive_and_count_toward_rate_and_budget(tmp_path):
+    async def case():
+        path, now = tmp_path / "db", [10000.0]
+        day = datetime.fromtimestamp(now[0], timezone.utc).date().isoformat()
+        old = [(f"old-{i}", "peer", now[0] - 100 * (i + 1), day,
+                .60 if i % 2 else .70, now[0] - 10, 1) for i in range(9)]
+        db = sqlite3.connect(path)
+        try:
+            with db:
+                db.executescript("""
+                    CREATE TABLE settings(name TEXT PRIMARY KEY,value TEXT NOT NULL);
+                    CREATE TABLE creations(peer TEXT NOT NULL,created REAL NOT NULL);
+                    CREATE TABLE permits(session TEXT PRIMARY KEY,peer TEXT NOT NULL,created REAL NOT NULL,
+                        day TEXT NOT NULL,amount REAL NOT NULL,expires REAL NOT NULL,closed INTEGER NOT NULL DEFAULT 0);
+                """)
+                db.execute("INSERT INTO settings VALUES('peer_salt','synthetic-historical-salt')")
+                db.execute("INSERT INTO creations VALUES('old-creation-peer',9999)")
+                db.executemany("INSERT INTO permits VALUES(?,?,?,?,?,?,?)", old)
+        finally:
+            db.close()
+        policy = AdmissionPolicy(path, env=FUNDED, now=lambda: now[0])
+        assert policy._salt == "synthetic-historical-salt"
+        lease = await policy.acquire_ai("new-visitor", "peer")
+        with pytest.raises(AdmissionDenied, match="ai_rate_limited") as caught:
+            await policy.acquire_ai("another", "peer", component="captions")
+        assert caught.value.retry_after == 2700
+        with policy._connect() as db:
+            assert db.execute("SELECT * FROM permits WHERE session LIKE 'old-%' ORDER BY session").fetchall() == old
+            assert db.execute("SELECT * FROM settings").fetchall() == [("peer_salt", "synthetic-historical-salt")]
+            assert db.execute("SELECT * FROM creations").fetchall() == [("old-creation-peer", 9999)]
+            assert db.execute("SELECT SUM(amount) FROM permits").fetchone()[0] == pytest.approx(sum(row[4] for row in old) + 2.20)
+        restored = AdmissionPolicy(path, env={"TOUCHLINE_AI_DAILY_BUDGET_USD": "100",
+            "TOUCHLINE_AI_TOTAL_BUDGET_USD": str(sum(row[4] for row in old) + 2.20)}, now=lambda: now[0])
+        with pytest.raises(AdmissionDenied, match="ai_budget_exhausted"):
+            await restored.acquire_ai("unrelated", "other-peer", component="captions")
+        now[0] += 2700
+        await policy.acquire_ai("new-visitor", "peer", component="captions")
+        assert lease["permit_id"] != "new-visitor"
+    asyncio.run(case())
+
+
+def test_legacy_unclosed_combined_permit_blocks_its_visitor_only(tmp_path):
+    async def case():
+        policy = AdmissionPolicy(tmp_path / "db", env=FUNDED, now=lambda: 10000)
+        with policy._connect() as db:
+            db.execute("INSERT INTO permits VALUES(?,?,?,?,?,?,?)", ("old-visitor", "old-peer", 9000,
+                "1970-01-01", .60, 9600, 0))
+        for component in ("director", "captions"):
+            with pytest.raises(AdmissionDenied, match="ai_cleanup_pending"):
+                await policy.acquire_ai("old-visitor", "old-peer", component=component)
+        await policy.acquire_ai("new-visitor", "other-peer")
+    asyncio.run(case())
+
+
+def test_default_lifetime_ceiling_never_refunds_closed_component_reservations(tmp_path):
+    async def case():
+        policy = AdmissionPolicy(tmp_path / "db", env={"TOUCHLINE_AI_DAILY_BUDGET_USD": "100"})
+        director = await policy.acquire_ai("visitor", "peer")
+        await policy.release_ai(director["permit_id"], confirmed=True)
+        for _ in range(5):
+            caption = await policy.acquire_ai("visitor", "peer", component="captions")
+            await policy.release_ai(caption["permit_id"], confirmed=True)
+        with pytest.raises(AdmissionDenied, match="ai_budget_exhausted"):
+            await policy.acquire_ai("visitor", "peer", component="captions")
+        with policy._connect() as db:
+            assert db.execute("SELECT COUNT(*),SUM(amount),SUM(closed) FROM permits").fetchone() == (6, pytest.approx(2.90), 6)
+    asyncio.run(case())
+
+
+def test_failed_durable_commit_fails_closed_without_losing_component_ownership_or_reservation(tmp_path):
     async def case():
         def fail():
             raise RuntimeError("PRIVATE_TOKEN_must_not_escape")
         path = tmp_path / "db"
-        policy = AdmissionPolicy(path, commit=fail)
+        policy = AdmissionPolicy(path, env=FUNDED, now=lambda: 10000, commit=fail)
         with pytest.raises(AdmissionDenied) as caught:
-            await policy.acquire_ai("a", "p-a")
+            await policy.acquire_ai("visitor", "peer")
         assert str(caught.value) == "admission_storage_unavailable"
         with pytest.raises(AdmissionDenied, match="admission_storage_unavailable"):
-            await policy.acquire_ai("b", "p-b")
+            await policy.acquire_ai("other", "other-peer")
+        restored = AdmissionPolicy(path, env=FUNDED, now=lambda: 10000)
         with pytest.raises(AdmissionDenied, match="ai_busy"):
-            await AdmissionPolicy(path).acquire_ai("b", "p-b")
+            await restored.acquire_ai("visitor", "peer")
+        await restored.acquire_ai("other", "other-peer")
     asyncio.run(case())
 
 
-def test_frame_flood_and_connection_limits_are_bounded(tmp_path):
+def test_durable_commit_does_not_starve_existing_message_http_or_connection_admission(tmp_path):
+    async def case():
+        started, release = threading.Event(), threading.Event()
+        def commit():
+            started.set()
+            assert release.wait(3)
+        policy = AdmissionPolicy(tmp_path / "db", env=FUNDED, commit=commit)
+        task = asyncio.create_task(policy.acquire_ai("new-visitor", "new-peer"))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            await asyncio.wait_for(asyncio.gather(policy.allow_message("existing"),
+                policy.allow_connection("existing-peer"), policy.allow_http("existing-peer")), .2)
+            assert not task.done()
+        finally:
+            release.set()
+            await task
+    asyncio.run(case())
+
+
+def test_frame_flood_and_connection_limits_are_unchanged(tmp_path):
     async def case():
         policy = AdmissionPolicy(tmp_path / "db", monotonic=lambda: 1000)
         for _ in range(40):
@@ -171,7 +270,7 @@ def test_cancellation_waits_for_native_commit_and_never_grants(tmp_path):
         def commit():
             started.set()
             release.wait(3)
-        policy = AdmissionPolicy(tmp_path / "db", commit=commit)
+        policy = AdmissionPolicy(tmp_path / "db", env=FUNDED, commit=commit)
         task = asyncio.create_task(policy.acquire_ai("a", "p-a"))
         await asyncio.to_thread(started.wait, 2)
         task.cancel()
@@ -186,4 +285,15 @@ def test_cancellation_waits_for_native_commit_and_never_grants(tmp_path):
             await task
         with pytest.raises(AdmissionDenied, match="admission_storage_unavailable"):
             await contender
+    asyncio.run(case())
+
+
+@pytest.mark.parametrize("component", [None, True, "combined", "unknown"])
+def test_invalid_component_never_reserves_a_permit(component, tmp_path):
+    async def case():
+        policy = AdmissionPolicy(tmp_path / "db", env=FUNDED)
+        with pytest.raises(ValueError, match="invalid_ai_component"):
+            await policy.acquire_ai("visitor", "peer", component=component)
+        with policy._connect() as db:
+            assert db.execute("SELECT COUNT(*) FROM permits").fetchone()[0] == 0
     asyncio.run(case())

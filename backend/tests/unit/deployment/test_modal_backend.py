@@ -87,6 +87,7 @@ def test_public_cpu_function_keeps_one_memory_owner_and_scales_to_zero(monkeypat
     assert module.app.name == "touchline-backend"
     assert options["min_containers"] == options["buffer_containers"] == 0
     assert options["max_containers"] == 1
+    assert options["cpu"] == (0.25, 4) and options["memory"] == (512, 4096)
     assert options["scaledown_window"] == 60
     assert options["timeout"] >= 1200 + 60
     assert "retries" not in options  # Web functions reject any explicit retry setting.

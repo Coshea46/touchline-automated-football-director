@@ -20,20 +20,21 @@ async def create_session(env, session_id, activation_guard):
     # begin at the start of each recording, independently of local demo flags.
     registry.sources = tuple(replace(source, offset_seconds=0) for source in registry.sources)
     prepared = SessionConfig(monitor=True, mode="real", model_version=NEW_MODEL_VERSION,
-        checkpoint=NEW_MODEL_VERSION, max_duration_seconds=120,
-        max_estimated_cost_usd=0.70, max_restarts=0,
+        checkpoint=NEW_MODEL_VERSION, max_duration_seconds=1200,
+        max_estimated_cost_usd=2.20, max_restarts=0,
         gpu_workers=math.ceil(len(registry.sources) / MATCHES_PER_GPU))
     session = ReplaySession(registry, config=SessionConfig(max_restarts=0),
         session_id=session_id, prepared_config=prepared, activation_guard=activation_guard,
-        caption_max_audio_seconds=120, caption_max_cost_usd=0.02)
+        caption_max_audio_seconds=1200, caption_max_cost_usd=0.14)
     await session.initialize()
     session.director.set_auto(False)
     session._caption_user_enabled = False
     if env.get("MATCHPULSE_CAPTIONS_ENABLED", "true").lower() == "true" and env.get("ELEVENLABS_API_KEY"):
         try:
             from touchline.captions.live.adapter import RealtimeCaptionWorker
-            worker = RealtimeCaptionWorker(session.caption_event, env=env,
-                max_audio_seconds=120, max_cost_usd=0.02)
+            session._hosted_caption_factory = lambda: RealtimeCaptionWorker(session.caption_event, env=env,
+                max_audio_seconds=1200, max_cost_usd=0.14)
+            worker = session._hosted_caption_factory()
             session.configure_captions(worker)
         except Exception:  # Provider/runtime details never enter a public response.
             session.configure_captions(None, configured=True, reason="runtime_unavailable")

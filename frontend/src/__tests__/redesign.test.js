@@ -114,6 +114,9 @@ test('navigation, theme, preview and caption controls remain named and keyboard 
   await act(async () => fireEvent.click(screen.getByRole('link', { name: 'Watch' })));
   expect(screen.getByRole('button', { name: 'Pause previews' })).toHaveAttribute('aria-pressed', 'false');
   const captions = screen.getByRole('region', { name: 'Commentary captions' });
+  const captionToggle = within(captions).getByRole('button', { name: /Commentary captions Off/ });
+  expect(captionToggle).toHaveAttribute('aria-pressed', 'false');
+  captionToggle.focus(); userEvent.keyboard('{Enter}');
   expect(within(captions).getByRole('button', { name: /Commentary captions On/ })).toHaveAttribute('aria-pressed', 'true');
   expect(within(captions).queryByRole('combobox')).not.toBeInTheDocument();
   const theme = screen.getByRole('button', { name: 'Switch to dark mode' });

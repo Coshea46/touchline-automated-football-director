@@ -17,6 +17,7 @@ import secrets
 import sqlite3
 import threading
 import time
+import uuid
 
 
 class AdmissionDenied(RuntimeError):
@@ -27,12 +28,15 @@ class AdmissionDenied(RuntimeError):
 
 
 class AdmissionPolicy:
-    AI_SECONDS = 120
-    # Four worst-case L4 workers including cold startup, plus focused captions.
-    # Old .60 rows remain unchanged and count at their actual stored amounts.
-    AI_RESERVATION_USD = .70
+    AI_SECONDS = 1200
+    # Independent, non-refundable component starts. Four worst-case L4 workers
+    # cost at most $2.1087072 for 1200+330 seconds; Scribe 1200 seconds costs $.13.
+    # Historical .60/.70 combined reservations retain their exact stored values.
+    AI_RESERVATION_USD = 2.20
+    CAPTION_RESERVATION_USD = .14
+    MAX_STARTS_PER_HOUR = 10
     # Retain uncertain leases beyond the GPU's duration + startup/cleanup bounds.
-    LEASE_SECONDS = 600
+    LEASE_SECONDS = 1680
 
     def __init__(self, db_path=None, *, commit=None, env=None, now=time.time,
                  monotonic=time.monotonic):
@@ -43,6 +47,8 @@ class AdmissionPolicy:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._commit, self.now, self.monotonic = commit, now, monotonic
         self._lock = asyncio.Lock()
+        # A durable Volume commit must never delay another visitor's heartbeat.
+        self._rate_lock = asyncio.Lock()
         self._db_lock = threading.RLock()
         self._buckets = OrderedDict()
         self._persistence_failed = False
@@ -75,6 +81,12 @@ class AdmissionPolicy:
                     session TEXT PRIMARY KEY, peer TEXT NOT NULL, created REAL NOT NULL,
                     day TEXT NOT NULL, amount REAL NOT NULL, expires REAL NOT NULL,
                     closed INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS permit_components (
+                    permit_id TEXT PRIMARY KEY, visitor_id TEXT NOT NULL,
+                    component TEXT NOT NULL CHECK(component IN ('director','captions')),
+                    FOREIGN KEY(permit_id) REFERENCES permits(session));
+                CREATE INDEX IF NOT EXISTS permit_components_visitor
+                    ON permit_components(visitor_id, component);
             """)
             db.execute("INSERT OR IGNORE INTO settings VALUES ('peer_salt', ?)", (secrets.token_hex(32),))
             self._salt = db.execute("SELECT value FROM settings WHERE name='peer_salt'").fetchone()[0]
@@ -136,16 +148,16 @@ class AdmissionPolicy:
         queue.append(now)
 
     async def allow_connection(self, peer):
-        async with self._lock:
+        async with self._rate_lock:
             self._rate("connect:" + self.peer_key(peer), 30, 60)
             self._rate("connect:global", 100, 60)
 
     async def allow_message(self, session_id):
-        async with self._lock:
+        async with self._rate_lock:
             self._rate("message:" + str(session_id)[:100], 40, 1)
 
     async def allow_http(self, peer):
-        async with self._lock:
+        async with self._rate_lock:
             self._rate("http:" + self.peer_key(peer), 60, 60)
             self._rate("http:global", 300, 60)
 
@@ -166,47 +178,60 @@ class AdmissionPolicy:
             await self._persist()
             return key
 
-    async def acquire_ai(self, session_id, peer):
+    async def acquire_ai(self, visitor_id, peer, *, component="director"):
+        if component not in ("director", "captions"):
+            raise ValueError("invalid_ai_component")
+        if not isinstance(visitor_id, str) or not 1 <= len(visitor_id) <= 120:
+            raise ValueError("invalid_ai_visitor")
+        amount = self.AI_RESERVATION_USD if component == "director" else self.CAPTION_RESERVATION_USD
         async with self._lock:
             if self._persistence_failed:
                 raise AdmissionDenied("admission_storage_unavailable")
             now = self.now()
             day = datetime.fromtimestamp(now, timezone.utc).date().isoformat()
+            permit_id = uuid.uuid4().hex
             def write():
                 with self._db_lock, self._connect() as db:
                     db.execute("BEGIN IMMEDIATE")
-                    existing = db.execute("SELECT session FROM permits WHERE session=?", (session_id,)).fetchone()
-                    if existing:
-                        raise AdmissionDenied("ai_session_used")
-                    active = db.execute("SELECT MAX(expires) FROM permits WHERE closed=0").fetchone()[0]
+                    # Old combined permits have no mapping and their session
+                    # key is the visitor ID. Preserve that unresolved ownership
+                    # for both components; never block unrelated visitors.
+                    active = db.execute("""SELECT MAX(p.expires) FROM permits p
+                        LEFT JOIN permit_components c ON c.permit_id=p.session
+                        WHERE p.closed=0 AND ((c.visitor_id=? AND c.component=?)
+                            OR (c.permit_id IS NULL AND p.session=?))""",
+                        (visitor_id, component, visitor_id)).fetchone()[0]
                     if active is not None:
                         if active <= now:
                             raise AdmissionDenied("ai_cleanup_pending")
                         raise AdmissionDenied("ai_busy", math.ceil(active - now))
-                    own = db.execute("SELECT MAX(created) FROM permits WHERE peer=? AND created>?", (peer, now - 3600)).fetchone()[0]
-                    if own is not None:
-                        raise AdmissionDenied("ai_rate_limited", math.ceil(own + 3600 - now))
+                    starts, first = db.execute("SELECT COUNT(*),MIN(created) FROM permits WHERE peer=? AND created>?",
+                                               (peer, now - 3600)).fetchone()
+                    if starts >= self.MAX_STARTS_PER_HOUR:
+                        raise AdmissionDenied("ai_rate_limited", math.ceil(first + 3600 - now))
                     total = db.execute("SELECT COALESCE(SUM(amount),0) FROM permits").fetchone()[0]
                     daily = db.execute("SELECT COALESCE(SUM(amount),0) FROM permits WHERE day=?", (day,)).fetchone()[0]
-                    if total + self.AI_RESERVATION_USD > self.total_budget + 1e-9:
+                    if total + amount > self.total_budget + 1e-9:
                         raise AdmissionDenied("ai_budget_exhausted")
-                    if daily + self.AI_RESERVATION_USD > self.daily_budget + 1e-9:
+                    if daily + amount > self.daily_budget + 1e-9:
                         raise AdmissionDenied("ai_daily_limit", 86400)
                     db.execute("INSERT INTO permits VALUES (?,?,?,?,?,?,0)",
-                               (session_id, peer, now, day, self.AI_RESERVATION_USD, now + self.LEASE_SECONDS))
+                               (permit_id, peer, now, day, amount, now + self.LEASE_SECONDS))
+                    db.execute("INSERT INTO permit_components VALUES (?,?,?)", (permit_id, visitor_id, component))
             await self._native(write)
             # An interrupted or failed commit never grants paid authorization.
             await self._persist()
-            return {"duration_seconds": self.AI_SECONDS, "reserved_usd": self.AI_RESERVATION_USD,
+            return {"permit_id": permit_id, "component": component,
+                    "duration_seconds": self.AI_SECONDS, "reserved_usd": amount,
                     "expires_at": now + self.AI_SECONDS}
 
-    async def release_ai(self, session_id, confirmed=False):
+    async def release_ai(self, permit_id, confirmed=False):
         if not confirmed:
             return
         async with self._lock:
             def write():
                 with self._db_lock, self._connect() as db:
-                    db.execute("UPDATE permits SET closed=1 WHERE session=?", (session_id,))
+                    db.execute("UPDATE permits SET closed=1 WHERE session=?", (permit_id,))
             await self._native(write)
             await self._persist()
 

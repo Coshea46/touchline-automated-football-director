@@ -56,7 +56,7 @@ export default function WatchView({ active, replay }) {
               connected={connection === 'connected'} connection={connection} canControl={sessionState?.controls_enabled !== false}
               scoreFresh={scoreFresh} inferenceLabel={inferenceLabel} autoLabel={autoLabel} autoTitle={autoTitle} onToggle={toggleAuto}
               visitor={visitor} sessionExpiresAt={sessionState?.session_expires_at || visitor?.expiresAt}
-              aiActive={sessionState?.ai_active} aiRemainingSeconds={Number.isFinite(sessionState?.ai_remaining_seconds)
+              aiActive={sessionState?.ai_active} aiLimitSeconds={sessionState?.ai_limit_seconds} aiRemainingSeconds={Number.isFinite(sessionState?.ai_remaining_seconds)
                 ? Math.max(0, sessionState.ai_remaining_seconds - Math.max(0, now - sessionState.server_time)) : undefined}
               aiReason={sessionState?.ai_reason} />
               <CommentaryCaptions feed={focused} mediaRef={mainVideo} live={captions.value} enabled={captions.enabled}

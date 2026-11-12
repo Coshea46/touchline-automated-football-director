@@ -376,7 +376,7 @@ def test_modal_websocket_uses_the_existing_bounded_pool_with_ingress_auth_and_ow
 
     module, registrations, _ = load_app(monkeypatch)
     limits = registrations['ReplayWorker']
-    assert limits['max_containers'] == MAX_GPU_WORKERS and limits['min_containers'] == 0
+    assert limits['max_containers'] == 10 * MAX_GPU_WORKERS and limits['min_containers'] == 0
     assert [secret.name for secret in limits['secrets']] == ['matchpulse-inference-replay-auth']
     assert module.ReplayWorker.web.asgi_options == {'requires_proxy_auth': True}
     assert 'secrets' not in registrations['FeatureWorker']

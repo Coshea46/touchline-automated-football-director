@@ -31,8 +31,10 @@ WebSockets to the CPU backend, which sends director state to the browser.
 
 T4/L4 capacity fallback changes worker resource availability while preserving
 the frozen model, raw `(75,215)` windows, seven-source assignment and source/clock
-contracts. A public browser run used three T4 workers and one L4 worker. Public AI grants reserve $0.70 for
-up to 120 seconds under the [hosted admission limits](modal-backend.md#configuration-and-durable-admission).
+contracts. A public browser run used three T4 workers and one L4 worker. Each
+20-minute Director run reserves $2.20, and independently admitted captions reserve
+$0.14. Visitors can run concurrently, with ten combined starts per IP per rolling
+hour and no cooldown, under the [hosted admission limits](modal-backend.md#configuration-and-durable-admission).
 
 The backend validates timestamps, freshness, sequence, model/session identity and
 clock epochs. Actual browser playback grants inference permits. Pauses, seeks,
@@ -167,7 +169,7 @@ focused captions, and confirmed cleanup. Its strict repeated seven-source score
 cohort check failed; sustained scoring in that joined path remains unverified.
 The hosted worker connection
 deadline is 110 seconds; the generic client default remains 90 seconds and the
-public AI permit remains 120 seconds. Cold provider queueing can outlast these
+public Director and caption runs are independently capped at 1200 seconds. Cold provider queueing can outlast these
 startup bounds; uncertain cleanup fails closed pending operator reconciliation.
 See [hosted verification status](modal-backend.md#frontend-connection-and-verification).
 Existing `MATCHPULSE_*` variables and `matchpulse` resource/runtime names remain

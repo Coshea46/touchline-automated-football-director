@@ -251,7 +251,9 @@ class ClassifierWorker:
 
 
 @app.cls(image=image, gpu=["T4", "L4"], cpu=(4, 8), memory=(4096, 8192),
-         volumes={'/models': models}, max_containers=MAX_GPU_WORKERS, min_containers=0,
+         # Ten independent visitors may each own up to four workers. This is
+         # pool capacity; each individual run retains its four-worker bound.
+         volumes={'/models': models}, max_containers=10 * MAX_GPU_WORKERS, min_containers=0,
          secrets=[modal.Secret.from_name('matchpulse-inference-replay-auth')],
          buffer_containers=0, scaledown_window=5, timeout=4000,
          startup_timeout=300, retries=0, include_source=False)

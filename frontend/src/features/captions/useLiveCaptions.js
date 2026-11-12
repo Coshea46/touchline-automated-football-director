@@ -3,7 +3,7 @@ import { LIVE_CAPTION_MODEL, readLiveCaption } from './liveCaptions';
 
 export default function useLiveCaptions({ session, feeds, focused, clock, media, send }) {
   // The session owns the default and remembers the viewer's requested state.
-  const [enabled, setEnabled] = useState(true);
+  const [enabled, setEnabled] = useState(false);
   const [value, setValue] = useState({ status: 'unavailable', available: false, model: LIVE_CAPTION_MODEL, text: '' });
   const valueRef = useRef(value);
   const desired = useRef(enabled);
@@ -13,15 +13,17 @@ export default function useLiveCaptions({ session, feeds, focused, clock, media,
   const pendingControl = useRef(null);
   const observerChoice = useRef(null);
   const wasController = useRef(false);
+  const rejectedControl = useRef(null);
   const update = useCallback((next) => { valueRef.current = next; setValue(next); }, []);
   const control = useCallback((nextEnabled) => {
+    rejectedControl.current = null;
     desired.current = nextEnabled; setEnabled(nextEnabled);
     const current = session.current;
     if (!nextEnabled) {
       if (current?.controls_enabled !== false) minimum.current = Math.max(minimum.current, activeGeneration.current + 1);
-      update({ ...valueRef.current, text: '', status: 'off' });
+      update({ ...valueRef.current, text: '', status: 'off', reason: null, controlRejected: false });
     }
-    else if (current?.controls_enabled !== false) update({ ...valueRef.current, text: '', status: 'connecting' });
+    else if (current?.controls_enabled !== false) update({ ...valueRef.current, text: '', status: 'connecting', reason: null, controlRejected: false });
     if (current?.controls_enabled === false) { observerChoice.current = nextEnabled; return; }
     pendingControl.current = { session_id: current?.session_id || null, enabled: nextEnabled, sent: false };
     if (current?.captions) pendingControl.current.sent = send.current({ type: 'captions', session_id: current.session_id, enabled: nextEnabled });
@@ -31,13 +33,15 @@ export default function useLiveCaptions({ session, feeds, focused, clock, media,
     const context = next.captions;
     const controlling = next.controls_enabled !== false;
     if (previous.session_id !== next.session_id) {
+      rejectedControl.current = null;
       minimum.current = 0; activeGeneration.current = -1; lastPlayback.current = null;
       observerChoice.current = null;
       if (pendingControl.current?.session_id && pendingControl.current.session_id !== next.session_id) pendingControl.current = null;
     }
     if (controlling && !wasController.current) observerChoice.current = null;
     const serverEnabled = typeof context?.user_enabled === 'boolean' ? context.user_enabled
-      : typeof context?.enabled === 'boolean' ? context.enabled : true;
+      : typeof context?.enabled === 'boolean' ? context.enabled : false;
+    if (serverEnabled) rejectedControl.current = null;
     let nextEnabled = serverEnabled;
     if (!controlling) {
       pendingControl.current = null;
@@ -57,7 +61,8 @@ export default function useLiveCaptions({ session, feeds, focused, clock, media,
       && previous.match_id === context.match_id && previous.clock_epoch === context.clock_epoch;
     update({ ...previous, ...context, session_id: next.session_id, model: context?.model || LIVE_CAPTION_MODEL,
       status: context?.status || 'unavailable', available: context?.available === true,
-      reason: context?.reason ?? null,
+      reason: rejectedControl.current?.reason ?? context?.reason ?? null,
+      controlRejected: Boolean(rejectedControl.current), retry_after: rejectedControl.current?.retryAfter,
       text: same && context.enabled && desired.current && ['listening', 'partial', 'committed', 'live', 'streaming', 'running'].includes(context.status) ? previous.text : '',
       source_key: same ? previous.source_key : undefined, source_identity: same ? previous.source_identity : undefined,
       state: same ? previous.state : null, receivedLocal: same ? previous.receivedLocal : null });
@@ -98,10 +103,12 @@ export default function useLiveCaptions({ session, feeds, focused, clock, media,
     if (pendingControl.current) pendingControl.current.sent = false;
     update({ ...valueRef.current, text: '', state: null, status: 'offline' });
   }, [update]);
-  const onControlRejected = useCallback((reason) => {
+  const onControlRejected = useCallback((reason, retryAfter) => {
+    rejectedControl.current = { reason, retryAfter: Number.isFinite(retryAfter) ? Math.max(0, retryAfter) : null };
     pendingControl.current = null;
     desired.current = false; setEnabled(false);
-    update({ ...valueRef.current, text: '', state: null, status: 'unavailable', reason, enabled: false });
+    update({ ...valueRef.current, text: '', state: null, status: 'unavailable', reason, enabled: false,
+      controlRejected: true, retry_after: rejectedControl.current.retryAfter });
   }, [update]);
   useEffect(() => {
     if (!value.text) return undefined;

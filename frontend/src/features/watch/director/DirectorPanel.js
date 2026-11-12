@@ -6,7 +6,7 @@ const MODE_HELP = { relaxed: 'Fewer automatic switches.', balanced: 'A balanced 
 export default function DirectorPanel({ director, mode, pendingMode, notice, onMode, enabled, available = true, modelVersion, held, canToggle, requested,
   holdUntil, now, monitoring, matchCount, monitoredCount, starting, connected, connection, canControl, scoreFresh,
   inferenceLabel, autoLabel, autoTitle, onToggle, canClaimControl = false, controlPending = false,
-  controlNotice, onClaimControl, visitor, sessionExpiresAt, aiActive, aiRemainingSeconds, aiReason }) {
+  controlNotice, onClaimControl, visitor, sessionExpiresAt, aiActive, aiRemainingSeconds, aiReason, aiLimitSeconds = 1200 }) {
   const cooldown = Math.max(0, Math.ceil((director?.auto_cooldown_until || 0) - now));
   const connectionNotice = visitor?.enabled && visitor.notice ? visitor.notice : connection === 'connecting' ? 'Connecting to Auto Director…'
     : !connected ? 'Director offline. You can still choose a match.' : !canControl
@@ -56,9 +56,9 @@ export default function DirectorPanel({ director, mode, pendingMode, notice, onM
         {visitor.phase === 'ended' ? <button type="button" className="theme-toggle" onClick={visitor.startNewReplay}>Start new replay</button>
           : <>
             {Number.isFinite(sessionExpiresAt) && <p>Replay time remaining: {Math.max(0, Math.ceil((sessionExpiresAt - now) / 60))} min.</p>}
-            {aiActive && Number.isFinite(aiRemainingSeconds) ? <p>AI demo: {Math.max(0, Math.ceil(aiRemainingSeconds))}s remaining.</p>
-              : ['ai_finished', 'budget_exhausted'].includes(aiReason) ? <p>Your AI demo allowance has ended.</p>
-                : <p>One AI demo, up to 2 minutes. Turning Auto Off ends the allowance.</p>}
+            {aiActive && Number.isFinite(aiRemainingSeconds) && <p>Director run: {Math.max(0, Math.ceil(aiRemainingSeconds))}s remaining.</p>}
+            {aiReason === 'ai_finished' && <p>Your Director run has ended. You can start another run when ready.</p>}
+            <p>Director runs last up to {Math.ceil(aiLimitSeconds / 60)} minutes. Captions have a separate control.</p>
           </>}
       </div>}
     </aside>

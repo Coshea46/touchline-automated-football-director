@@ -4,7 +4,9 @@ export default function directorViewState({ connection, sessionState, backendErr
     && ['real', 'features_mock'].includes(sessionState.mode)
     && (sessionState.auto_available ?? ['running', 'degraded', 'paused'].includes(sessionState.state));
   const autoCanStart = connection === 'connected' && sessionState?.auto_can_start === true;
-  const autoStarting = connection === 'connected' && sessionState?.auto_starting === true;
+  const pendingStartup = independent && autoSwitch && sessionState?.auto_requested === true
+    && sessionState?.ai_active !== true && autoCanStart;
+  const autoStarting = connection === 'connected' && (sessionState?.auto_starting === true || pendingStartup);
   const autoToggleable = connection === 'connected' && sessionState?.controls_enabled !== false
     && (autoAvailable || autoCanStart || autoStarting);
   const held = autoAvailable && autoSwitch && holdUntil > 0;
@@ -18,11 +20,11 @@ export default function directorViewState({ connection, sessionState, backendErr
     source_ended: 'The replay has ended.',
     not_prepared: 'Monitoring is not enabled on this backend.',
     closing: 'The backend is shutting down.',
-    ai_busy: 'Auto Director is busy with another viewer. You can keep choosing matches.',
-    rate_limited: 'The AI demo is limited right now. You can keep choosing matches.',
-    ai_finished: 'Your AI demo has ended. Manual viewing is still available.',
-    awaiting_start: 'Auto Director is off. Start your bounded AI demo when you are ready.',
-    server_unavailable: 'The AI demo is unavailable right now. You can keep choosing matches.',
+    ai_busy: 'Your previous Director run is still stopping. Please try again shortly.',
+    rate_limited: 'Start limit reached: up to 10 Director or caption starts per hour.',
+    ai_finished: 'Your Director run has ended. You can start another run when ready.',
+    awaiting_start: 'Auto Director is off. Start a Director run when you are ready.',
+    server_unavailable: 'Auto Director is unavailable right now. You can keep choosing matches.',
   };
   const admissionReason = independent && ['ai_busy', 'budget_exhausted', 'rate_limited', 'ai_finished', 'server_unavailable'].includes(sessionState?.ai_reason)
     ? sessionState.ai_reason : null;
@@ -32,8 +34,8 @@ export default function directorViewState({ connection, sessionState, backendErr
       : 'Another tab controls this replay. Restart the backend to enable control handoff.'
     : !autoToggleable ? startReasons[startReason] || 'Auto Director needs a ready monitoring session'
     : admissionReason ? startReasons[admissionReason]
-    : autoCanStart ? 'Start a bounded real-model monitoring session'
     : autoStarting && autoSwitch ? 'Monitoring is starting. Click to turn automatic switching off.'
+    : autoCanStart ? 'Start a bounded real-model monitoring session'
     : !autoSwitch ? 'Turn on automatic switching'
     : held ? 'Paused after your pick; resumes shortly. Click to turn off'
       : 'Automatically switching to the most interesting match. Click to turn off';
