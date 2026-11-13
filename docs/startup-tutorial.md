@@ -1,16 +1,33 @@
 # On-demand startup tutorial
 
-Production opens a 44.7-second Synthesia tutorial, then “Setting things up”,
+Production opens a 70.4-second narrated Synthesia tutorial, then “Setting things up”,
 then fades into the app only after the server reports the Director available.
 Fresh hosted sessions default to All Action; an explicitly saved viewer mode
 still overrides the default when the client joins.
-Skip advances to setup, not past readiness. Narration can be enabled with the
-native video controls; muted autoplay supports browser playback policies.
+Skip advances to setup, not past readiness. The tutorial tries audible playback
+first. If the browser blocks it, playback continues muted with a prominent
+“Turn sound on” button. If muted playback is also blocked, “Play tutorial with
+sound” starts it through a user gesture. Native volume controls remain available.
 The generated illustrative interface is labeled as such. The static MP4 is
 served from Vercel; Synthesia is not called for each visitor.
 
 Video source: [Synthesia editor](https://app.synthesia.io/syren/video-edit/a9dde434-0998-4ac3-94b6-0b9ea47d6d17).
 The exported asset is `frontend/public/media/touchline-tutorial.mp4`.
+The website export preserves the 1920×1080 video stream and normalizes the AAC
+narration to -16 LUFS (measured -16.02 LUFS, -1.45 dB true peak). The versioned
+media URL prevents reuse of the earlier tutorial from the browser cache.
+
+The tutorial explains the Director as the automatic match selector, the custom
+model built by Conor O’Shea, parallel analysis of all seven matches, and the
+separate internal scoring system that chooses the next match. It describes the
+current implementation: a five-second observation window every **two** seconds
+(`streaming/runner.py` advances 30 frames at 15 fps). All Action is the default,
+manual selection remains available, and captions have an independent switch.
+The brand's spoken pronunciation is “touch line”; its displayed spelling stays
+Touchline. The tutorial contains no demo disclosure or zero-clock explanation.
+The page immediately below the video says that the matches are recordings used
+to demonstrate Touchline and are not live. Readiness and playback still use the
+existing server contract; editing the tutorial does not change model cadence.
 
 Each onboarding starts a fresh visitor capability. The focused recording decodes
 at zero while paused. Only after reporting that actual paused clock does the
@@ -49,6 +66,15 @@ manual entry reconnects or makes another paid request. The tutorial's timer
 cannot replace the recorded failure reason or steal focus on a hidden transition.
 
 ## Verification
+
+The tutorial revision passed 253 frontend tests and a production build. A
+headless Edge check with audible autoplay blocked confirmed muted playback,
+one-click sound, the disclosure outside the video, mobile layout, uninterrupted
+playback on resize, and skip/failure handling. Its backend sockets were
+intercepted; it sent no paid startup requests and closed the browser afterward.
+Audio-track, duration and loudness checks passed on the actual shipped MP4.
+The “touch line” pronunciation alias is applied in Synthesia; automated audio
+level checks cannot confirm subjective pronunciation.
 
 1,104 backend tests passed (one optional Torch skip); 244 frontend tests passed,
 with production build and installed-wheel checks. A real public cold-start check
