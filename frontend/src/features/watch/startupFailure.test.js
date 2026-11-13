@@ -6,3 +6,9 @@ test('worker connection failure is distinguished from cancellation and budget de
   expect(startupFailure(replay({ state: 'disabled', ai_reason: 'budget_exhausted' }))).toMatch(/spending allowance/);
   expect(startupFailure(replay({ state: 'starting', ai_reason: 'active' }))).toBe('');
 });
+
+test('a stopped worker is not incorrectly described as a connection failure', () => {
+  const message = startupFailure(replay({ state: 'error', error_code: 'worker_lease_expired' }));
+  expect(message).toMatch(/AI session stopped before setup finished/);
+  expect(message).not.toMatch(/could not connect/);
+});

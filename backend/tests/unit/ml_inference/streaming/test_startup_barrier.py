@@ -10,22 +10,23 @@ from tests.support.ml_inference.client import control, sdk_fixture, session
 from tests.support.ml_inference.runner import Harness
 
 
-def test_fast_ready_shard_waits_more_than_thirty_seconds_for_cohort_then_scores_without_restart(monkeypatch):
+@pytest.mark.parametrize('hold_seconds', [45, 70.4])
+def test_fast_ready_shard_waits_for_cohort_or_tutorial_then_scores_without_restart(monkeypatch, hold_seconds):
     harness = Harness(monkeypatch, matches=1, seconds=90)
     harness.control_override = lambda h: {
-        'position': max(0, h.clock.now - 45), 'playing': h.clock.now >= 45,
-        'startup_waiting': h.clock.now < 45,
+        'position': max(0, h.clock.now - hold_seconds), 'playing': h.clock.now >= hold_seconds,
+        'startup_waiting': h.clock.now < hold_seconds,
         'active': not any(f.assembled for f in h.features),
     }
     result = harness.run()
     assert result['reason'] == 'control_stopped'
-    assert 50 <= harness.clock.now < 51
+    assert hold_seconds + 5 <= harness.clock.now < hold_seconds + 6
     assert len(harness.cursors) == len(harness.features) == 1
     assert harness.features[0].assembled == [75]
     assert result['scores'][0]['observation_end'] == 5
     assert result['metrics']['detector_frames'] == 75
     assert all(p['metrics']['detector_frames'] == 0 for p in harness.published
-               if p['produced_at'] < 1045)
+               if p['produced_at'] < 1000 + hold_seconds)
     assert all(c.closed for c in harness.cursors)
 
 

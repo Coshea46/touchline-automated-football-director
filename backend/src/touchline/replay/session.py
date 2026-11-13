@@ -52,6 +52,7 @@ class ReplaySession:
         self.last_report_at = None
         self._paused_at = None
         self._ready_at = None
+        self._setup_until = 0.0
         self._monitor_started_at = None
         self._handle = None
         self._stopping_handle = None
@@ -464,6 +465,9 @@ class ReplaySession:
             self._unplayable.discard(message["match_id"])
             self.director.healthy[message["match_id"]] = self._model_health[message["match_id"]]
         if self.playing:
+            # A real playback report consumes the one-time tutorial hold.
+            # Pausing afterward must retain the ordinary idle shutdown guard.
+            self._setup_until = 0.0
             self._paused_at = None
         elif self._paused_at is None:
             self._paused_at = now

@@ -216,7 +216,10 @@ class MonitoringCoordinator:
                  and session.monotonic() - session.last_report_at < session.config.heartbeat_seconds)
         result = {"session_id": session.session_id, "clock_epoch": session.clock_epoch,
                   "position": session.position, "playing": session.playing and fresh,
-                  "startup_waiting": not session._worker_ready,
+                  # Group readiness can precede the end of the tutorial. Carry
+                  # its bounded hold to GPU workers as well as the CPU timer.
+                  "startup_waiting": (not session._worker_ready
+                                      or session.monotonic() < session._setup_until),
                   "rate": session.rate, "active": bool(active and fresh and session.controller is not None),
                   "expires_at": (now + max(0, session.config.heartbeat_seconds
                                              - (session.monotonic() - session.last_report_at))
@@ -495,6 +498,7 @@ class MonitoringCoordinator:
                 elif status in ("error", "failed", "unavailable", "eof", "stopped"):
                     session._model_health[match_id] = False
         if snapshot.get("state") == "error":
+            logger.warning("Inference worker failed: %s", diagnostics)
             session.director.last_worker_sequence = snapshot["worker_sequence"]
             session._last_recommendation = None
             session.director.reset_confirmation()
@@ -521,6 +525,7 @@ class MonitoringCoordinator:
                 session._finished_reason = "all_sources_ended" if reason == "all_sources_ended" else "session_limit_reached"
                 session._set_state("ended" if reason == "all_sources_ended" else "stopped", session._finished_reason)
             else:
+                logger.warning("Inference worker stopped unexpectedly: %s", diagnostics)
                 session._restarts += 1
                 session._retry_at = session.monotonic() + 5
                 session._set_state("error", "worker_lease_expired")

@@ -38,6 +38,14 @@ scores or elapsed media. The ordinary 20-minute paid deadline remains in force.
 Cancel and the two-minute UI deadline close the WebSocket and trigger owned
 cleanup. Retry explicitly creates a fresh session and is subject to admission.
 
+The setup hold also travels in the worker control packet's `startup_waiting`
+flag after the whole group reports ready. Otherwise the worker's normal
+30-second pause guard could stop it before the 70.4-second tutorial finishes.
+The first accepted playing report consumes this hold; a later pause cannot
+restore it. The existing two-minute bound, heartbeat expiry and owned shutdown
+still apply. Worker terminal diagnostics use bounded labels in backend logs;
+the UI distinguishes a stopped session from a connection failure.
+
 Both CPU and GPU deployments use `min_containers=0`, `buffer_containers=0` and
 a 30-second scale-down window. An open visitor connection still consumes CPU;
 active setup/Director sessions consume GPU. Storage and request charges remain.
@@ -66,6 +74,13 @@ manual entry reconnects or makes another paid request. The tutorial's timer
 cannot replace the recorded failure reason or steal focus on a hidden transition.
 
 ## Verification
+
+The tutorial worker-hold fix passed 466 tests across replay, streaming and hosted
+backend suites, the installed-wheel checks, the startup frontend tests and the
+production build. Regression coverage holds a ready group at zero throughout
+the tutorial, releases it on real playback, retains later pause shutdown, and
+checks hold/heartbeat expiry. The worker harness also waits 70.4 seconds before
+processing the first permitted five-second observation without restarting.
 
 The tutorial revision passed 253 frontend tests and a production build. A
 headless Edge check with audible autoplay blocked confirmed muted playback,
