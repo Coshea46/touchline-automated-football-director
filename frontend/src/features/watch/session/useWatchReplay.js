@@ -12,8 +12,8 @@ import useVisitorSession from './useVisitorSession';
 export const MANUAL_HOLD_MS = 30000;
 
 // The Watch coordinator remains mounted while navigation only hides its view.
-export default function useWatchReplay(activePage) {
-  const visitor = useVisitorSession();
+export default function useWatchReplay(activePage, startupHeld = false, startupCancelled = false) {
+  const visitor = useVisitorSession(undefined, startupHeld);
   const [feeds, setFeeds] = useState(FEEDS);
   const [sessionState, setSessionState] = useState(null);
   const [backendError, setBackendError] = useState('');
@@ -29,7 +29,10 @@ export default function useWatchReplay(activePage) {
   const [holdUntil, setHoldUntil] = useState(0);
   const [seekTo, setSeekTo] = useState(null);
   const [announcement, setAnnouncement] = useState('');
-  const clock = useRef({ time: 0, playing: true, rate: 1, muted: false, volume: 1, stalled: true, available: true });
+  const clock = useRef({ time: 0, playing: !startupHeld, rate: 1, muted: false, volume: 1, stalled: true, available: true });
+  const startup = useRef({ held: startupHeld, requested: null });
+  startup.current.held = startupHeld;
+  useEffect(() => { clock.current.playing = !startupHeld; }, [startupHeld]);
   const send = useRef(() => false);
   const session = useRef(null);
   const pendingClaim = useRef(null);
@@ -45,6 +48,21 @@ export default function useWatchReplay(activePage) {
   const pendingSelection = useRef(null);
   const pendingAck = useRef(null);
   const mainVideo = useRef(null);
+  const wasHeld = useRef(startupHeld);
+  useEffect(() => {
+    if (wasHeld.current && !startupHeld) {
+      const video = mainVideo.current;
+      if (video) {
+        Promise.resolve(video.play()).catch(() => {
+          video.muted = true;
+          setAudioEnabled(false);
+          return video.play()?.catch(() => {});
+        });
+      }
+      headingRef.current?.focus();
+    }
+    wasHeld.current = startupHeld;
+  });
   const audio = useAudioOwnership({ media: mainVideo, clock, sourceId: focusedId, enabled: audioEnabled });
   const requestOwnedAudio = audio.requestAudio;
   const releaseOwnedAudio = audio.releaseAudio;
@@ -68,6 +86,7 @@ export default function useWatchReplay(activePage) {
     const feed = feedsRef.current.find((item) => item.id === focusedRef.current);
     if (!current || !feed) return;
     captionPlayback();
+    if (startup.current.held) clock.current.playing = false;
     if (current.controls_enabled === false) return;
     send.current({
       type: 'playback', session_id: current.session_id, match_id: feed.cameraId,
@@ -75,6 +94,10 @@ export default function useWatchReplay(activePage) {
       stalled: Boolean(clock.current.stalled), available: clock.current.available !== false,
       ended: Boolean(clock.current.ended),
     });
+    if (startup.current.held && clock.current.available && !clock.current.stalled
+      && clock.current.time <= .05 && startup.current.requested !== current.session_id) {
+      if (send.current({ type: 'setup', session_id: current.session_id })) startup.current.requested = current.session_id;
+    }
   }, [captionPlayback]);
 
   useEffect(() => {
@@ -305,7 +328,7 @@ export default function useWatchReplay(activePage) {
       autoRef.current = false; setAutoSwitch(false);
       dirtyControls.current.auto = false;
     }
-  }, undefined, send, visitor.socketOptions);
+  }, undefined, send, { ...visitor.socketOptions, blocked: startupCancelled || visitor.socketOptions?.blocked });
 
   useEffect(() => {
     if (connection !== 'connected') {
@@ -334,7 +357,7 @@ export default function useWatchReplay(activePage) {
     // Only this explicit action replaces the capability and resets the timeline.
     session.current = null; synced.current = false;
     delete clock.current.sample;
-    Object.assign(clock.current, { time: 0, playing: true, rate: 1, stalled: true, available: false, ended: false });
+    Object.assign(clock.current, { time: 0, playing: !startup.current.held, rate: 1, stalled: true, available: false, ended: false });
     autoRef.current = true; holdRef.current = 0;
     dirtyControls.current = { auto: false, select: false };
     pendingSelection.current = null; pendingAck.current = null; latestRecommendation.current = null;

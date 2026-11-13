@@ -17,8 +17,8 @@ def test_replay_worker_prefers_l4_with_t4_fallback_in_one_bounded_pool(monkeypat
     assert limits["gpu"] == ["L4", "T4"] and limits["max_containers"] == 40
     assert registrations["FeatureWorker"]["gpu"] == "T4"
     assert limits["region"] == "eu" and "routing_region" not in limits
-    assert limits["min_containers"] == 8 and limits["buffer_containers"] == 0
-    assert limits["scaledown_window"] == 300 and limits["retries"] == 0
+    assert limits["min_containers"] == 0 and limits["buffer_containers"] == 0
+    assert limits["scaledown_window"] == 30 and limits["retries"] == 0
     assert 0 < limits["timeout"] <= 4000 and 0 < limits["startup_timeout"] <= 300
     assert limits["cpu"][1] <= 8 and limits["memory"][1] <= 8192
     assert volumes == ["matchpulse-inference-models"]

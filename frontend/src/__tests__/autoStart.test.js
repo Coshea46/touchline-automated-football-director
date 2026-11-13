@@ -62,6 +62,31 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/');
 });
 
+test('onboarding warms from factual paused zero and opens only after tutorial plus Director readiness', () => {
+  process.env.REACT_APP_STARTUP_TUTORIAL = 'true';
+  jest.useFakeTimers();
+  try {
+    const { container } = render(<App />);
+    const zero = { playback: { position: 0, playing: false, rate: 1, clock_epoch: 0 },
+      matches: envelope().matches.map((feed) => ({ ...feed, offset_seconds: 0 })) };
+    act(() => { socket().open(); socket().receive(envelope(zero)); });
+    const main = container.querySelector('.tile--main video');
+    ready(main);
+    act(() => jest.advanceTimersByTime(500));
+    expect(main.currentTime).toBe(0);
+    expect(socket().sent.filter((m) => m.type === 'setup')).toHaveLength(1);
+    expect(socket().sent.filter((m) => m.type === 'playback').every((m) => !m.playing && m.position === 0)).toBe(true);
+    fireEvent.click(screen.getByText('Skip tutorial'));
+    expect(screen.getByRole('heading', { name: 'Setting things up' })).toBeVisible();
+    receive(running(zero));
+    act(() => jest.advanceTimersByTime(350));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  } finally {
+    delete process.env.REACT_APP_STARTUP_TUTORIAL;
+    jest.useRealTimers();
+  }
+});
+
 test('a prepared CPU session starts once through Auto and cannot apply a recommendation before readiness', () => {
   const { container, video } = join();
   const nodes = Array.from(container.querySelectorAll('video'));

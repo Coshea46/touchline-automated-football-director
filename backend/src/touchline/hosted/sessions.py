@@ -47,6 +47,7 @@ class Visitor:
     ai_permit: str | None = field(default=None, repr=False)
     ai_cleanup_confirmed: bool = True
     startup_pending: bool = True
+    setup_requested: bool = False
     stop_task: object = None
     captions_active: bool = False
     captions_deadline: float | None = None
@@ -206,6 +207,17 @@ class SessionManager:
         if not isinstance(message, dict) or message.get("session_id") != visitor.session.session_id:
             return visitor.session._error("session_mismatch")
         kind = message.get("type")
+        if kind == "setup":
+            session = visitor.session
+            if visitor.setup_requested:
+                return None
+            if (session._controller_report_pending or session.last_report_at is None
+                    or session.playing or session.stalled or session.position > .05):
+                return {**session._error("invalid_playback"), "feature": "director"}
+            visitor.setup_requested = True
+            visitor.startup_pending = False
+            session._setup_until = session.monotonic() + 120
+            return await self._request_start(visitor, connection, "director", defer_paid_start)
         if kind in {"auto", "captions"} and type(message.get("enabled")) is bool:
             component = "director" if kind == "auto" else "captions"
             if kind == "auto":

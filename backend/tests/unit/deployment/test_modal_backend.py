@@ -86,10 +86,10 @@ def test_public_cpu_function_keeps_one_warm_memory_owner(monkeypatch):
     module = load_module(monkeypatch)
     options = module.public_backend.function_options
     assert module.app.name == "touchline-backend"
-    assert options["min_containers"] == 1 and options["buffer_containers"] == 0
+    assert options["min_containers"] == 0 and options["buffer_containers"] == 0
     assert options["max_containers"] == 1
     assert options["cpu"] == (0.25, 4) and options["memory"] == (512, 4096)
-    assert options["scaledown_window"] == 60
+    assert options["scaledown_window"] == 30
     assert options["timeout"] >= 1200 + 60
     assert "retries" not in options  # Web functions reject any explicit retry setting.
     assert options["routing_region"] == "eu-west"

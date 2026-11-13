@@ -35,9 +35,14 @@ function storedCapability(enabled) {
 
 // Capabilities stay in this tab's sessionStorage and private closures. They are
 // never included in a URL, rendered props, permanent storage or console output.
-export default function useVisitorSession(enabled = INDEPENDENT_SESSIONS) {
+export default function useVisitorSession(enabled = INDEPENDENT_SESSIONS, freshStart = false) {
   const initial = useRef(null);
-  if (!initial.current) initial.current = storedCapability(enabled);
+  if (!initial.current) {
+    if (enabled && freshStart) {
+      try { window.sessionStorage.removeItem(VISITOR_STORAGE_KEY); } catch { /* Storage may be disabled. */ }
+    }
+    initial.current = storedCapability(enabled);
+  }
   const capability = useRef(initial.current.capability);
   const [generation, setGeneration] = useState(0);
   const [info, setInfo] = useState(() => ({ phase: initial.current.invalid ? 'ended' : 'connecting',

@@ -389,7 +389,7 @@ class MonitoringCoordinator:
             # The previous report remains the worker's only permit until its
             # original expiry. A handoff itself never creates another GPU input.
             return
-        paused_idle = (session._worker_ready and session._ready_at is not None
+        paused_idle = (now >= getattr(session, "_setup_until", 0) and session._worker_ready and session._ready_at is not None
                        and now - session._ready_at > session.config.pause_idle_seconds
                        and session._paused_at is not None
                        and now - session._paused_at >= session.config.pause_idle_seconds)

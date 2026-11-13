@@ -29,8 +29,8 @@ image = (build_backend_image(modal, BACKEND_ROOT) if modal.is_local() else
 
 @app.function(image=image, secrets=[configuration, inference_authentication], volumes={STATE_DIRECTORY: state_volume},
               cpu=(0.25, 4), memory=(512, 4096), timeout=3600, startup_timeout=120,
-              min_containers=1, max_containers=1, buffer_containers=0,
-              scaledown_window=60, region="eu-west", routing_region="eu-west", include_source=False)
+              min_containers=0, max_containers=1, buffer_containers=0,
+              scaledown_window=30, region="eu-west", routing_region="eu-west", include_source=False)
 @modal.concurrent(max_inputs=100, target_inputs=50)
 @modal.asgi_app(label=ENDPOINT_LABEL)
 def public_backend():

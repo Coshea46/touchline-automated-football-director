@@ -22,9 +22,9 @@ SCALEDOWN = int(os.environ.get("MATCHPULSE_ML_SCALEDOWN_SECONDS", "5"))
 CLASSIFIER_TIMEOUT = int(os.environ.get("MATCHPULSE_ML_CLASSIFIER_TIMEOUT_SECONDS", "60"))
 # Eight already initialized workers cover two simultaneous four-shard visitors.
 # This is a retained capacity floor, not eight spare workers beside active runs.
-REPLAY_WARM_CONTAINERS = 8
+REPLAY_WARM_CONTAINERS = 0
 REPLAY_BUFFER_CONTAINERS = 0
-REPLAY_SCALEDOWN_SECONDS = 300
+REPLAY_SCALEDOWN_SECONDS = 30
 if min(CONTAINERS, TIMEOUT, SCALEDOWN, CLASSIFIER_TIMEOUT) < 1:
     raise ValueError("Inference deployment resource values must be positive")
 
