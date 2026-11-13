@@ -23,6 +23,31 @@ test('skip does not bypass readiness and setup has a finite timeout', () => {
   expect(enter).not.toHaveBeenCalled();
   act(() => jest.advanceTimersByTime(120000));
   expect(cancel).toHaveBeenCalledTimes(1);
+  expect(cancel).toHaveBeenCalledWith(expect.stringContaining('startup took too long'), true);
+  expect(enter).not.toHaveBeenCalled();
+});
+
+test.each(['ended', 'skip'])('automatic failure preserves the tutorial until %s without stealing control focus', (finish) => {
+  const enter = jest.fn(), cancel = jest.fn();
+  const props = { ready: false, cancelled: false, onEnter: enter, onCancel: cancel, onRetry: jest.fn(), onManual: jest.fn(),
+    notice: 'The AI spending allowance has been reached.', retryAllowed: false };
+  const view = render(<StartupExperience {...props} />);
+  const tutorial = screen.getByLabelText('Touchline tutorial');
+  const skip = screen.getByRole('button', { name: 'Skip tutorial' });
+  skip.focus();
+  view.rerender(<StartupExperience {...props} cancelled deferFailure />);
+  expect(screen.getByLabelText('Touchline tutorial')).toBe(tutorial);
+  expect(screen.getByRole('heading', { name: 'Welcome to Touchline' })).toBeVisible();
+  expect(document.activeElement).toBe(skip);
+  act(() => jest.advanceTimersByTime(120000));
+  expect(cancel).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('Touchline tutorial')).toBe(tutorial);
+  if (finish === 'ended') fireEvent.ended(tutorial);
+  else fireEvent.click(skip);
+  expect(screen.getByRole('heading', { name: 'Setup paused' })).toBeVisible();
+  expect(screen.getByText(props.notice)).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Continue without AI' })).toBeVisible();
   expect(enter).not.toHaveBeenCalled();
 });
 test('cancelled setup cannot transition even if a late ready event arrives', () => {

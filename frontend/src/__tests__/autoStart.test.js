@@ -92,16 +92,80 @@ test('startup preserves the worker failure reason after cancellation closes the 
   jest.useFakeTimers();
   try {
     render(<App />);
+    const tutorial = screen.getByLabelText('Touchline tutorial');
     act(() => { socket().open(); socket().receive(envelope({ state: 'error', error_code: 'inference_unavailable' })); });
-    expect(screen.getByRole('heading', { name: 'Setup paused' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Welcome to Touchline' })).toBeVisible();
+    expect(screen.getByLabelText('Touchline tutorial')).toBe(tutorial);
     expect(screen.getByText(/could not connect to its AI workers/)).toBeVisible();
+    expect(socket().readyState).toBe(3);
     act(() => jest.advanceTimersByTime(120000));
+    expect(screen.getByLabelText('Touchline tutorial')).toBe(tutorial);
+    fireEvent.ended(tutorial);
+    expect(screen.getByRole('heading', { name: 'Setup paused' })).toBeVisible();
     expect(screen.getByText(/could not connect to its AI workers/)).toBeVisible();
     expect(screen.queryByText(/startup took too long/)).not.toBeInTheDocument();
     expect(socket().readyState).toBe(3);
   } finally {
     delete process.env.REACT_APP_STARTUP_TUTORIAL;
     jest.useRealTimers();
+  }
+});
+
+test('budget denial keeps the tutorial but stops paid requests, then permits manual viewing without reconnecting', () => {
+  process.env.REACT_APP_STARTUP_TUTORIAL = 'true';
+  jest.useFakeTimers();
+  try {
+    const { container } = render(<App />);
+    const tutorial = screen.getByLabelText('Touchline tutorial');
+    const zero = { playback: { position: 0, playing: false, rate: 1, clock_epoch: 0 },
+      matches: envelope().matches.map((feed) => ({ ...feed, offset_seconds: 0 })),
+      captions: { ...envelope().captions, user_enabled: false, enabled: false, status: 'disabled' } };
+    const connection = socket();
+    act(() => { connection.open(); connection.receive(envelope(zero)); });
+    const main = container.querySelector('.tile--main video');
+    ready(main);
+    expect(connection.sent.filter((message) => message.type === 'setup')).toHaveLength(1);
+    receive(envelope({ ...zero, sequence: 2, ai_reason: 'budget_exhausted', auto_can_start: false }));
+    expect(connection.readyState).toBe(3);
+    expect(screen.getByRole('heading', { name: 'Welcome to Touchline' })).toBeVisible();
+    expect(screen.getByLabelText('Touchline tutorial')).toBe(tutorial);
+    expect(screen.getByText(/AI spending allowance has been reached/)).toBeVisible();
+    const sentAtDenial = connection.sent.slice();
+    act(() => jest.advanceTimersByTime(120000));
+    expect(global.FakeWebSocket.instances).toHaveLength(1);
+    expect(connection.sent).toEqual(sentAtDenial);
+    expect(screen.getByLabelText('Touchline tutorial')).toBe(tutorial);
+    expect(main.currentTime).toBe(0);
+    fireEvent.ended(tutorial);
+    expect(screen.getByRole('heading', { name: 'Setup paused' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    const play = jest.spyOn(main, 'play');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue without AI' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(container.querySelector('.tile--main video')).toBe(main);
+    expect(play).toHaveBeenCalled();
+    act(() => jest.advanceTimersByTime(1000));
+    expect(global.FakeWebSocket.instances).toHaveLength(1);
+    expect(connection.readyState).toBe(3);
+    expect(connection.sent).toEqual(sentAtDenial);
+  } finally {
+    delete process.env.REACT_APP_STARTUP_TUTORIAL;
+    jest.useRealTimers();
+  }
+});
+
+test('explicit Cancel immediately closes the tutorial and backend connection', () => {
+  process.env.REACT_APP_STARTUP_TUTORIAL = 'true';
+  try {
+    render(<App />);
+    const connection = socket();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel setup' }));
+    expect(screen.getByRole('heading', { name: 'Setup paused' })).toBeVisible();
+    expect(screen.queryByLabelText('Touchline tutorial')).not.toBeInTheDocument();
+    expect(connection.readyState).toBe(3);
+    expect(global.FakeWebSocket.instances).toHaveLength(1);
+  } finally {
+    delete process.env.REACT_APP_STARTUP_TUTORIAL;
   }
 });
 

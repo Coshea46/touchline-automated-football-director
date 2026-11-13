@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import './StartupExperience.css';
 
-export default function StartupExperience({ ready, onEnter, onCancel, cancelled, onRetry, onManual, notice }) {
+export default function StartupExperience({ ready, onEnter, onCancel, cancelled, onRetry, onManual, notice,
+  deferFailure = false, retryAllowed = true }) {
   const [phase, setPhase] = useState('tutorial');
   const video = useRef(null);
   const heading = useRef(null);
-  useEffect(() => { heading.current?.focus(); }, [phase, cancelled]);
+  const showFailure = cancelled && (!deferFailure || phase !== 'tutorial');
+  useEffect(() => { heading.current?.focus(); }, [phase, showFailure]);
   useEffect(() => {
     if (cancelled) return undefined;
-    const timer = setTimeout(() => onCancel('AI startup took too long. Setup has stopped and your matches have not started. You can try again or continue without AI.'), 120000);
+    const timer = setTimeout(() => onCancel('AI startup took too long. Setup has stopped and your matches have not started. You can try again or continue without AI.', true), 120000);
     return () => clearTimeout(timer);
   }, [onCancel, cancelled]);
   useEffect(() => {
@@ -20,21 +22,22 @@ export default function StartupExperience({ ready, onEnter, onCancel, cancelled,
     role="dialog" aria-modal="true" aria-labelledby="startup-title">
     <div className="startup-card">
       <p className="startup-brand">TOUCHLINE <span>YOUR MATCHES. YOUR DIRECTOR.</span></p>
-      <h1 id="startup-title" tabIndex={-1} ref={heading}>{cancelled ? 'Setup paused' : phase === 'tutorial' ? 'Welcome to Touchline' : 'Setting things up'}</h1>
-      {cancelled ? <><p>{notice || 'Setup stopped. Your match clock has stayed paused. Start again when you’re ready.'}</p>
-        <button onClick={onRetry}>Try again</button>
+      <h1 id="startup-title" tabIndex={-1} ref={heading}>{showFailure ? 'Setup paused' : phase === 'tutorial' ? 'Welcome to Touchline' : 'Setting things up'}</h1>
+      {showFailure ? <><p>{notice || 'Setup stopped. Your match clock has stayed paused. Start again when you’re ready.'}</p>
+        {retryAllowed && <button onClick={onRetry}>Try again</button>}
         {onManual && <button className="startup-cancel" onClick={onManual}>Continue without AI</button>}</> : <>
         {phase === 'tutorial' ? <>
           <video ref={video} className="startup-video" src="/media/touchline-tutorial.mp4" autoPlay muted controls playsInline
             aria-label="Touchline tutorial" onEnded={() => setPhase('setup')} onError={() => setPhase('setup')} />
-          <p>A quick introduction while your Director gets ready. Use the video controls to turn narration on.</p>
+          <p>{cancelled ? 'You can finish the tutorial, then continue without AI.' : 'A quick introduction while your Director gets ready.'} Use the video controls to turn narration on.</p>
+          {cancelled && notice && <p role="status" aria-live="polite" className="startup-detail">{notice}</p>}
           <button onClick={() => { video.current?.pause(); setPhase('setup'); }}>Skip tutorial</button>
         </> : <>
           <div className="startup-orbit" aria-hidden="true"><span /><span /><span /></div>
           <p role="status" aria-live="polite">{ready ? 'Your Director is ready. Let’s play.' : 'Preparing your private replay and starting the AI Director…'}</p>
           <p className="startup-detail">Your matches are paused at 00:00. First startup can take a little longer.</p>
         </>}
-        <button className="startup-cancel" onClick={onCancel}>Cancel setup</button>
+        {!cancelled && <button className="startup-cancel" onClick={onCancel}>Cancel setup</button>}
       </>}
     </div>
   </section>;

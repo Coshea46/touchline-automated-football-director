@@ -38,6 +38,14 @@ that reason with a generic cancellation message.
 `REACT_APP_STARTUP_TUTORIAL=false` disables onboarding explicitly. Production
 enables it by default; local/test environments opt in with `true`.
 
+Automatic failures cancel the backend connection immediately but do not interrupt
+the tutorial. The availability notice appears alongside the same playing video.
+After the video ends or is skipped, the preserved failure and manual-viewing
+option are shown. Exhausted funding has no futile Retry button. Explicit user
+Cancel still closes the tutorial immediately. Neither automatic failure nor
+manual entry reconnects or makes another paid request. The tutorial's timer
+cannot replace the recorded failure reason or steal focus on a hidden transition.
+
 ## Verification
 
 1,104 backend tests passed (one optional Torch skip); 244 frontend tests passed,
@@ -56,3 +64,13 @@ refunding reservations. The final recorder samples overlay presence synchronousl
 at each native WebSocket send without changing its payload, and passed.
 After the final check, Modal reported zero CPU/GPU runners, zero running inputs
 and zero backlog. Both deployed services remained available on demand.
+
+The later tutorial-denial fix passed 250 frontend tests and its production build.
+A browser check against the production UI intercepted a synthetic budget denial:
+the tutorial remained visible, the backend never connected, there was no retry
+loop, and manual entry succeeded. Under the owner's separately authorized $10
+testing allowance, one real cold-start check then passed with readiness at
+23.573 seconds and app entry at 46.162 seconds. All 170 reports while the overlay
+existed were paused at zero; one setup request was sent, native playback advanced
+after entry, stopped lifecycle was confirmed, and the browser closed without
+page/server errors. Prior receipts remain unchanged.

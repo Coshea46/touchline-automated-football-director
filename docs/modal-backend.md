@@ -3,8 +3,9 @@
 **Current deployment (13 November 2026):** both CPU and GPU minimum container
 counts are zero, with no warm buffer and 30-second scale-down. The startup
 tutorial and bounded paused initialization replace the earlier always-on floor.
-The public reservation cap is $42.62 cumulative, retaining $32.62 of earlier
-reservations, with a $10 UTC-day cap. See [startup flow](startup-tutorial.md).
+The current testing reservation cap is $50.42 cumulative, retaining $40.42 of
+earlier reservations. The $17.80 UTC-day cap retains $7.80 already reserved that
+day plus the owner's new $10 testing allowance. See [startup flow](startup-tutorial.md).
 Earlier warm-capacity and $100 settings below describe the prior deployment.
 
 The website's CPU deployment is separate from the existing GPU inference app:
