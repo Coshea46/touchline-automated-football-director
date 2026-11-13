@@ -42,6 +42,8 @@ class AdmissionPolicy:
     def __init__(self, db_path=None, *, commit=None, env=None, now=time.time,
                  monotonic=time.monotonic):
         env = os.environ if env is None else env
+        if env.get("TOUCHLINE_AI_BUDGET_MODE", "lifetime") != "lifetime":
+            raise ValueError("daily_usage_requires_dynamodb")
         self.daily_budget = self._amount(env.get("TOUCHLINE_AI_DAILY_BUDGET_USD", "1.20"))
         self.total_budget = self._amount(env.get("TOUCHLINE_AI_TOTAL_BUDGET_USD", "3.00"))
         self._path = Path(db_path or env.get("TOUCHLINE_ADMISSION_DB", "/app/state/admission.sqlite3"))

@@ -3,9 +3,18 @@
 **Current deployment (13 November 2026):** both CPU and GPU minimum container
 counts are zero, with no warm buffer and 30-second scale-down. The startup
 tutorial and bounded paused initialization replace the earlier always-on floor.
-The current testing reservation cap is $50.42 cumulative, retaining $40.42 of
-earlier reservations. The $17.80 UTC-day cap retains $7.80 already reserved that
-day plus the owner's new $10 testing allowance. See [startup flow](startup-tutorial.md).
+The public demo now uses `TOUCHLINE_AI_BUDGET_MODE=daily_usage` with an $8
+daily allowance, resetting at 00:00 UTC. There is no lifetime funding gate.
+New reservations use `budget/usage-day#YYYY-MM-DD` and `budget/usage-open`;
+old lifetime totals, daily records and permits are retained without rewriting.
+Confirmed shutdown settles new permits using worst-case elapsed compute plus
+330 seconds of startup/cleanup overhead and 15% headroom. Unused allowance is
+returned atomically, once; unconfirmed shutdown retains the entire reservation.
+Active reservations carry across midnight. Midnight-spanning runs are counted
+conservatively on both dates. These are application compute estimates, not an
+AWS/Modal invoice cap; storage, traffic and subscriptions are separate.
+Daily accounting requires DynamoDB; local SQLite keeps its legacy funding mode.
+See [startup flow](startup-tutorial.md).
 Earlier warm-capacity and $100 settings below describe the prior deployment.
 
 The website's CPU deployment is separate from the existing GPU inference app:

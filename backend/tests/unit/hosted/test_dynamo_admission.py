@@ -15,6 +15,55 @@ from tests.support.dynamo import Dynamo
 FUNDED = {"TOUCHLINE_AI_DAILY_BUDGET_USD": "100", "TOUCHLINE_AI_TOTAL_BUDGET_USD": "100"}
 
 
+def test_daily_usage_ignores_retired_lifetime_cap_settles_once_and_retains_history():
+    async def case():
+        db = Dynamo()
+        clock = [10000]
+        admission = policy(db, env={"TOUCHLINE_AI_BUDGET_MODE":"daily_usage",
+            "TOUCHLINE_AI_DAILY_BUDGET_USD":"8", "TOUCHLINE_AI_TOTAL_BUDGET_USD":"0"}, now=lambda:clock[0])
+        leases = await asyncio.gather(*(admission.acquire_ai(str(i), str(i)) for i in range(3)))
+        with pytest.raises(AdmissionDenied, match="ai_daily_limit"):
+            await admission.acquire_ai('fourth','fourth')
+        before = deepcopy(db.items)
+        permit = leases[0]['permit_id']
+        await admission.release_ai(permit, confirmed=False)
+        assert db.items == before
+        clock[0] += 60
+        await asyncio.gather(*(admission.release_ai(permit, confirmed=True) for _ in range(2)))
+        record = db.items[('permit#'+permit,'record')]
+        assert record['amount_microusd'] == 2600000
+        assert 0 < record['charged_microusd'] < 2600000
+        assert db.items[('budget','usage-open')]['amount_microusd'] == 5200000
+        settled = deepcopy(db.items)
+        await admission.release_ai(permit, confirmed=True)
+        assert db.items == settled
+        await admission.release_ai(leases[1]['permit_id'], confirmed=True)
+        await admission.acquire_ai('fourth','fourth')
+        assert db.items[('budget','total')]['amount_microusd'] >= before[('budget','total')]['amount_microusd']
+    asyncio.run(case())
+
+
+def test_daily_reset_carries_unclosed_reservations_and_does_not_refund_legacy_permits():
+    async def case():
+        db = Dynamo()
+        db.historical('legacy')
+        clock = [86300]
+        admission = policy(db, env={**FUNDED, 'TOUCHLINE_AI_BUDGET_MODE':'daily_usage',
+            'TOUCHLINE_AI_DAILY_BUDGET_USD':'8'}, now=lambda:clock[0])
+        leases = await asyncio.gather(*(admission.acquire_ai(str(i),str(i)) for i in range(3)))
+        clock[0] = 86410
+        with pytest.raises(AdmissionDenied, match='ai_daily_limit'):
+            await admission.acquire_ai('new','new')
+        for lease in leases:
+            await admission.release_ai(lease['permit_id'], confirmed=True)
+        await admission.acquire_ai('new','new')
+        old_daily = deepcopy(db.items[('budget','day#1970-01-01')]) if ('budget','day#1970-01-01') in db.items else None
+        await admission.release_ai('legacy', confirmed=True)
+        assert db.items.get(('budget','day#1970-01-01')) == old_daily
+        assert 2600000 < db.items[('budget','usage-day#1970-01-02')]['amount_microusd'] < 8000000
+    asyncio.run(case())
+
+
 def policy(db, *, env=None, now=lambda: 10000):
     return DynamoAdmissionPolicy("offline-admission", client=db,
         env=FUNDED if env is None else env, now=now, monotonic=lambda: 1000)

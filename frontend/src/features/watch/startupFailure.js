@@ -7,7 +7,7 @@ export default function startupFailure(replay) {
     return `${reason} Your matches have not started. You can try again or continue without AI.`;
   }
   const messages = {
-    budget_exhausted: 'The demo’s AI spending allowance has been reached. You can continue watching without AI.',
+    budget_exhausted: 'Today’s AI spending allowance has been reached. It resets at 00:00 UTC. You can continue watching without AI.',
     rate_limited: 'Too many AI starts from this connection. Please wait before trying again, or continue without AI.',
     ai_busy: 'Your previous AI session is still stopping. Please wait before trying again.',
     server_unavailable: 'The AI service is unavailable right now. You can continue watching without AI.',

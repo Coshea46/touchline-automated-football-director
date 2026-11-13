@@ -76,11 +76,12 @@ the UI distinguishes a stopped session from a connection failure.
 Both CPU and GPU deployments use `min_containers=0`, `buffer_containers=0` and
 a 30-second scale-down window. An open visitor connection still consumes CPU;
 active setup/Director sessions consume GPU. Storage and request charges remain.
-No periodic keepalive creates workers. The current reservation ceilings are
-$55.42 retained total and $22.80 per UTC day, including the owner's latest
-approved $5 increase. Earlier reservations remain counted. These application
-limits are not provider invoice caps. A Director start reserves $2.60
-conservatively.
+No periodic keepalive creates workers. The current compute allowance is $8 per
+UTC day with no lifetime gate. A Director start reserves $2.60; confirmed stops
+settle to conservative elapsed usage and return the remainder. Unconfirmed
+stops keep their reservation, including across midnight. Historical lifetime
+records remain for auditing. Storage, traffic and subscriptions are separate
+from this application compute allowance, which is not a provider invoice cap.
 
 Cold GPU startup can still fail: one public attempt on 13 November had three
 worker connections time out at 110 seconds. GPU container placement now uses

@@ -12,7 +12,9 @@ Schema version 1, one DynamoDB table with string ``PK`` and ``SK``:
 
 Permanent permit records retain every historical amount and timestamp. Migrated
 unmapped combined permits use component='legacy' and both owner keys. Expired
-unclosed ownership remains blocked; budget counters never decrease. The ready
+unclosed ownership remains blocked. Legacy budget counters never decrease;
+version-2 daily usage returns unused reservations only on confirmed closure.
+The ready
 marker is written last by the separate, stopped-app migration procedure.
 """
 
@@ -67,6 +69,10 @@ class DynamoAdmissionPolicy(AdmissionPolicy):
     def __init__(self, table_name=None, *, client=None, client_factory=None,
                  env=None, now=time.time, monotonic=time.monotonic):
         self.env = os.environ if env is None else env
+        mode = self.env.get("TOUCHLINE_AI_BUDGET_MODE", "lifetime")
+        if mode not in ("lifetime", "daily_usage"):
+            raise ValueError("invalid_ai_budget_mode")
+        self.daily_usage = mode == "daily_usage"
         self.table_name = table_name or self.env.get(TABLE_ENV)
         if not isinstance(self.table_name, str) or re.fullmatch(r"[A-Za-z0-9_.-]{3,255}", self.table_name) is None:
             raise ValueError("invalid_admission_table")
@@ -285,19 +291,25 @@ class DynamoAdmissionPolicy(AdmissionPolicy):
             events = self._events(starts, now - 3600)
             if len(events) >= self.MAX_STARTS_PER_HOUR:
                 raise AdmissionDenied("ai_rate_limited", math.ceil(events[0] + 3600 - now))
-            total, daily = self._get("budget", "total"), self._get("budget", "day#" + day)
+            day_key = ("usage-day#" if self.daily_usage else "day#") + day
+            total, daily = self._get("budget", "total"), self._get("budget", day_key)
             if total is None:
                 raise ValueError("missing_admission_total")
             total_amount, daily_amount = self._counter(total), self._counter(daily)
-            if total_amount + amount_micro > self._total_micro:
+            if not self.daily_usage and total_amount + amount_micro > self._total_micro:
                 raise AdmissionDenied("ai_budget_exhausted")
-            if daily_amount + amount_micro > self._daily_micro:
+            outstanding = self._get("budget", "usage-open") if self.daily_usage else None
+            open_amount = self._counter(outstanding)
+            day_open = int((daily or {}).get("open_microusd", 0))
+            carry = max(0, open_amount - day_open) if self.daily_usage else 0
+            if daily_amount + carry + amount_micro > self._daily_micro:
                 raise AdmissionDenied("ai_daily_limit", 86400)
             owner_keys = [{"PK": owner_pk, "SK": owner_sk}]
-            self._write([
+            writes = [
                 self._put("budget", "total", total, {"amount_microusd": total_amount + amount_micro},
-                          remaining=self._total_micro - amount_micro),
-                self._put("budget", "day#" + day, daily, {"amount_microusd": daily_amount + amount_micro},
+                          remaining=None if self.daily_usage else self._total_micro - amount_micro),
+                self._put("budget", day_key, daily, {"amount_microusd": daily_amount + amount_micro,
+                          **({"open_microusd": day_open + amount_micro} if self.daily_usage else {})},
                           remaining=self._daily_micro - amount_micro),
                 self._put(peer_pk, "starts", starts, {"events": events + [now]}),
                 self._put(owner_pk, owner_sk, owner, {"permit_id": permit_id,
@@ -305,7 +317,12 @@ class DynamoAdmissionPolicy(AdmissionPolicy):
                 self._put("permit#" + permit_id, "record", None, {"visitor_id": visitor_id,
                     "component": component, "peer": peer, "created": now, "day": day,
                     "amount_microusd": amount_micro, "expires": now + self.LEASE_SECONDS,
-                    "closed": False, "owner_keys": owner_keys}, unique=True)], token)
+                    "closed": False, "owner_keys": owner_keys,
+                    **({"accounting_version": 2, "budget_day_key": day_key} if self.daily_usage else {})}, unique=True)]
+            if self.daily_usage:
+                writes.append(self._put("budget", "usage-open", outstanding,
+                    {"amount_microusd": open_amount + amount_micro}))
+            self._write(writes, token)
             return {"permit_id": permit_id, "component": component,
                     "duration_seconds": self.AI_SECONDS, "reserved_usd": amount,
                     "expires_at": float(now + self.AI_SECONDS)}
@@ -325,7 +342,42 @@ class DynamoAdmissionPolicy(AdmissionPolicy):
             if not isinstance(owner_keys, list) or not 1 <= len(owner_keys) <= 2:
                 raise ValueError("invalid_admission_ownership")
             fields = {key: value for key, value in permit.items() if key not in ("PK", "SK", "version")}
+            settlement = None
+            if permit.get("accounting_version") == 2:
+                # Count the entire wall-clock lease, even pauses and setup, at
+                # worst-case four-worker rates plus startup/cleanup and region
+                # headroom. This is a conservative estimate, not an invoice.
+                elapsed = max(0, float(self.now()) - float(permit["created"]))
+                if permit["component"] == "director":
+                    from touchline.ml_inference.streaming.contract import MAX_WORKER_RATE
+                    estimate = (elapsed + 330) * 4 * MAX_WORKER_RATE * 1.15
+                else:
+                    estimate = elapsed * self.CAPTION_RESERVATION_USD / self.AI_SECONDS
+                reserved = int(permit["amount_microusd"])
+                charged = min(reserved, math.ceil(estimate * MICRO_USD))
+                settlement = (reserved, charged)
+                fields.update(charged_microusd=charged, settled_at=_number(self.now()))
             writes = [self._put(pk, "record", permit, {**fields, "closed": True})]
+            if settlement is not None:
+                reserved, charged = settlement
+                day_key = permit["budget_day_key"]
+                daily, outstanding = self._get("budget", day_key), self._get("budget", "usage-open")
+                amount, opened = self._counter(daily), self._counter(outstanding)
+                day_open = int((daily or {}).get("open_microusd", 0))
+                if amount < reserved or opened < reserved or day_open < reserved:
+                    raise ValueError("invalid_usage_accounting")
+                writes.extend([
+                    self._put("budget", day_key, daily, {"amount_microusd": amount-reserved+charged,
+                        "open_microusd": day_open-reserved}),
+                    self._put("budget", "usage-open", outstanding, {"amount_microusd": opened-reserved})])
+                end_key = "usage-day#" + datetime.fromtimestamp(float(self.now()), timezone.utc).date().isoformat()
+                if end_key != day_key:
+                    # Conservatively count a midnight-spanning run on both
+                    # dates. Removing its carry must not erase today's usage.
+                    end_day = self._get("budget", end_key)
+                    writes.append(self._put("budget", end_key, end_day,
+                        {"amount_microusd": self._counter(end_day) + charged,
+                         "open_microusd": int((end_day or {}).get("open_microusd", 0))}))
             for key in owner_keys:
                 if (not isinstance(key, dict) or set(key) != {"PK", "SK"}
                         or key["PK"] != "visitor#" + permit["visitor_id"]
