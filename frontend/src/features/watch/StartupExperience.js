@@ -7,9 +7,10 @@ export default function StartupExperience({ ready, onEnter, onCancel, cancelled,
   const heading = useRef(null);
   useEffect(() => { heading.current?.focus(); }, [phase, cancelled]);
   useEffect(() => {
-    const timer = setTimeout(onCancel, 120000);
+    if (cancelled) return undefined;
+    const timer = setTimeout(() => onCancel('AI startup took too long. Setup has stopped and your matches have not started. You can try again or continue without AI.'), 120000);
     return () => clearTimeout(timer);
-  }, [onCancel]);
+  }, [onCancel, cancelled]);
   useEffect(() => {
     if (phase !== 'setup' || !ready || cancelled) return undefined;
     const timer = setTimeout(onEnter, 350);

@@ -8,6 +8,7 @@ import TablesPage from '../features/tables/TablesPage';
 import NewsPage from '../features/news/NewsPage';
 import { useCallback, useEffect, useState } from 'react';
 import StartupExperience from '../features/watch/StartupExperience';
+import startupFailure from '../features/watch/startupFailure';
 
 export default function App() {
   const [theme, setTheme] = useTheme();
@@ -16,13 +17,17 @@ export default function App() {
     && (process.env.NODE_ENV === 'production' || process.env.REACT_APP_STARTUP_TUTORIAL === 'true'));
   const [cancelled, setCancelled] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const cancel = useCallback(() => setCancelled(true), []);
+  const [failure, setFailure] = useState('');
+  const cancel = useCallback((reason) => {
+    setFailure(typeof reason === 'string' ? reason : 'Setup cancelled. Your matches have not started.');
+    setCancelled(true);
+  }, []);
   const enter = useCallback(() => setStartup(false), []);
   const replay = useWatchReplay(activePage, startup, cancelled);
   useEffect(() => {
-    if (startup && (replay.visitor.phase === 'ended' || replay.sessionState?.state === 'error'
-      || ['ai_busy', 'budget_exhausted', 'rate_limited', 'server_unavailable', 'ai_finished'].includes(replay.sessionState?.ai_reason))) cancel();
-  }, [startup, replay.visitor.phase, replay.sessionState?.state, replay.sessionState?.ai_reason, cancel]);
+    const reason = startupFailure(replay);
+    if (startup && !cancelled && reason) cancel(reason);
+  }, [startup, cancelled, replay, cancel]);
   const view = { ...replay, view: { ...replay.view, inferenceBuffering: startup || replay.view.inferenceBuffering } };
   return <><div inert={startup ? true : undefined} aria-hidden={startup ? true : undefined}><AppShell theme={theme} setTheme={setTheme} activePage={activePage} navigate={navigate} announcement={replay.announcement}>
     <main id="matches" className="app-content" tabIndex={-1} onKeyDown={replay.onPlayerKey}>
@@ -31,7 +36,7 @@ export default function App() {
       <div id="news" hidden={activePage !== 'news'}><NewsPage active={activePage === 'news'} /></div>
     </main>
   </AppShell></div>{startup && <StartupExperience key={attempt} ready={replay.view.autoAvailable} onEnter={enter} onCancel={cancel}
-    cancelled={cancelled} notice={replay.visitor.notice || replay.modeNotice} onManual={replay.sessionState ? enter : undefined} onRetry={() => {
-      replay.visitor.startNewReplay(); setCancelled(false); setAttempt((value) => value + 1);
+    cancelled={cancelled} notice={failure} onManual={replay.sessionState ? enter : undefined} onRetry={() => {
+      replay.visitor.startNewReplay(); setFailure(''); setCancelled(false); setAttempt((value) => value + 1);
     }} />}</>;
 }

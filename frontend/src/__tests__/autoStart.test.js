@@ -87,6 +87,24 @@ test('onboarding warms from factual paused zero and opens only after tutorial pl
   }
 });
 
+test('startup preserves the worker failure reason after cancellation closes the connection', () => {
+  process.env.REACT_APP_STARTUP_TUTORIAL = 'true';
+  jest.useFakeTimers();
+  try {
+    render(<App />);
+    act(() => { socket().open(); socket().receive(envelope({ state: 'error', error_code: 'inference_unavailable' })); });
+    expect(screen.getByRole('heading', { name: 'Setup paused' })).toBeVisible();
+    expect(screen.getByText(/could not connect to its AI workers/)).toBeVisible();
+    act(() => jest.advanceTimersByTime(120000));
+    expect(screen.getByText(/could not connect to its AI workers/)).toBeVisible();
+    expect(screen.queryByText(/startup took too long/)).not.toBeInTheDocument();
+    expect(socket().readyState).toBe(3);
+  } finally {
+    delete process.env.REACT_APP_STARTUP_TUTORIAL;
+    jest.useRealTimers();
+  }
+});
+
 test('a prepared CPU session starts once through Auto and cannot apply a recommendation before readiness', () => {
   const { container, video } = join();
   const nodes = Array.from(container.querySelectorAll('video'));

@@ -26,6 +26,15 @@ No periodic keepalive creates workers. The operator caps new public reservations
 to $10 beyond retained spending, with a $10 UTC-day cap. This application limit
 is not a provider invoice cap. A Director start reserves $2.60 conservatively.
 
+Cold GPU startup can still fail: one public attempt on 13 November had three
+worker connections time out at 110 seconds. GPU container placement now uses
+Modal's default global pool instead of requiring Europe, retaining L4/T4 fallback
+and zero warm workers. This removes a placement restriction; another successful
+paid cold-start test has not been run after this change. No allowance was raised
+for this fix. The UI preserves the startup failure, spending-limit or explicit
+cancellation message after closing its connection; the timeout cannot replace
+that reason with a generic cancellation message.
+
 `REACT_APP_STARTUP_TUTORIAL=false` disables onboarding explicitly. Production
 enables it by default; local/test environments opt in with `true`.
 
