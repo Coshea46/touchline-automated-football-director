@@ -1,6 +1,6 @@
 # On-demand startup tutorial
 
-Production opens a 101-second narrated Synthesia tutorial, then “Setting things up”,
+Production opens a 100.3-second narrated Synthesia tutorial, then “Setting things up”,
 then fades into the app only after the server reports the Director available.
 Fresh hosted sessions default to All Action; an explicitly saved viewer mode
 still overrides the default when the client joins.
@@ -17,18 +17,21 @@ The website export preserves the 1920×1080 video stream and normalizes the AAC
 narration to -16 LUFS. The versioned
 media URL prevents reuse of the earlier tutorial from the browser cache.
 
-The opening describes overlapping matches on a Champions League night and the
-wish to follow exciting moments as they happen without constant manual stream
-switching or waiting for highlights afterward. It presents the product's purpose
-without promising that every exciting moment will be caught.
+The opening states the problem explicitly in both narration and large on-screen
+sentences: several football matches are live at once, viewers want the best
+moments from each game live instead of later as replays, but can focus on only
+one match at a time. Generic match tiles alone are not the problem statement.
+This presents the product's purpose without promising every exciting event.
 
-The tutorial explains the Director as what chooses which match to watch and
-when to switch, the custom
+The Director definition is: “Your Director controls which match is currently
+shown on the main screen, and decides when to switch.” The diagram labels the
+large selected video “Main screen”. The tutorial then explains the custom
 model built by Conor O’Shea, parallel analysis of all seven matches, and the
 separate internal scoring system that chooses the next match. It describes the
 current implementation: a five-second observation window every **two** seconds
 (`streaming/runner.py` advances 30 frames at 15 fps). All Action is the default,
-manual selection remains available, and captions have an independent switch.
+and captions have an independent switch. The manual-selection/override tutorial
+segment is removed, including its narration and pointer demonstration.
 The narration and animation explicitly emphasize **all seven videos at the same
 time**, with every stream feeding the prediction model concurrently.
 
@@ -98,6 +101,14 @@ manual entry reconnects or makes another paid request. The tutorial's timer
 cannot replace the recorded failure reason or steal focus on a hidden transition.
 
 ## Verification
+
+The explicit-opening revision is 100.3 seconds, with narration measured at
+-16.01 LUFS and -1.49 dB true peak. The exported opening frames visibly state
+the live-matches/best-moments/replays problem in full sentences. The Director
+diagram identifies the selected video as the main screen. The manual-selection
+narration and demonstration are removed from this revision.
+The production build and browser checks passed for sound, mobile layout,
+duration, and the native video-end transition, with no paid AI startup requests.
 
 The problem-first revision is 100.97 seconds, with AAC narration measured at
 -16.00 LUFS and -1.43 dB true peak. Its opening, simultaneous seven-stream
