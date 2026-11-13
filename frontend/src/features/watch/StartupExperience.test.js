@@ -4,38 +4,12 @@ import StartupExperience from './StartupExperience';
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks(); });
 
-test('tries narration with sound, falls back to muted autoplay, and enables sound on a click', async () => {
-  const play = jest.spyOn(HTMLMediaElement.prototype, 'play')
-    .mockRejectedValueOnce(new DOMException('Autoplay blocked', 'NotAllowedError'))
-    .mockResolvedValue();
-  await act(async () => render(<StartupExperience ready={false} onEnter={jest.fn()} onCancel={jest.fn()} />));
+test('silent tutorial has no sound controls and retains the recordings disclosure', () => {
+  render(<StartupExperience ready={false} onEnter={jest.fn()} onCancel={jest.fn()} />);
   const player = screen.getByLabelText('Touchline tutorial');
-  expect(play).toHaveBeenCalledTimes(2);
   expect(player.muted).toBe(true);
   expect(screen.getByText(/recordings used to demonstrate Touchline/)).toBeVisible();
-  act(() => { player.volume = 0; });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Turn sound on' })));
-  expect(player.muted).toBe(false);
-  expect(player.volume).toBe(1);
-  expect(play).toHaveBeenCalledTimes(3);
-  expect(screen.queryByRole('button', { name: 'Turn sound on' })).not.toBeInTheDocument();
-});
-
-test('offers explicit playback when both autoplay attempts are blocked', async () => {
-  jest.spyOn(HTMLMediaElement.prototype, 'play').mockRejectedValue(new DOMException('Autoplay blocked', 'NotAllowedError'));
-  await act(async () => render(<StartupExperience ready={false} onEnter={jest.fn()} onCancel={jest.fn()} />));
-  expect(screen.getByRole('button', { name: 'Play tutorial with sound' })).toBeVisible();
-  expect(screen.getByLabelText('Touchline tutorial')).toBeVisible();
-});
-
-test('native volume controls keep the sound button in sync', async () => {
-  await act(async () => render(<StartupExperience ready={false} onEnter={jest.fn()} onCancel={jest.fn()} />));
-  const player = screen.getByLabelText('Touchline tutorial');
-  expect(player.muted).toBe(false);
-  act(() => { player.muted = true; fireEvent.volumeChange(player); });
-  expect(screen.getByRole('button', { name: 'Turn sound on' })).toBeVisible();
-  act(() => { player.muted = false; fireEvent.volumeChange(player); });
-  expect(screen.queryByRole('button', { name: 'Turn sound on' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /sound/i })).not.toBeInTheDocument();
 });
 test('tutorial completion waits for real readiness, then fades to the app', () => {
   const enter = jest.fn(), cancel = jest.fn();

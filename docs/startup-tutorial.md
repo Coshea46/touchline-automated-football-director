@@ -1,27 +1,29 @@
 # On-demand startup tutorial
 
-Production opens a 100.3-second narrated Synthesia tutorial, then “Setting things up”,
+Production opens a 101.3-second silent Synthesia tutorial, then “Setting things up”,
 then fades into the app only after the server reports the Director available.
 Fresh hosted sessions default to All Action; an explicitly saved viewer mode
 still overrides the default when the client joins.
-Skip advances to setup, not past readiness. The tutorial tries audible playback
-first. If the browser blocks it, playback continues muted with a prominent
-“Turn sound on” button. If muted playback is also blocked, “Play tutorial with
-sound” starts it through a user gesture. Native volume controls remain available.
+Skip advances to setup, not past readiness. The tutorial autoplays muted with
+native playback controls and has no audio track or sound button. Its explanations
+are conveyed by the on-screen text and animation.
 The generated illustrative interface is labeled as such. The static MP4 is
 served from Vercel; Synthesia is not called for each visitor.
 
 Video source: [Synthesia editor](https://app.synthesia.io/syren/video-edit/a9dde434-0998-4ac3-94b6-0b9ea47d6d17).
 The exported asset is `frontend/public/media/touchline-tutorial.mp4`.
-The website export preserves the 1920×1080 video stream and normalizes the AAC
-narration to -16 LUFS. The versioned
+The website export preserves the 1920×1080 video stream and removes all audio
+streams. The versioned
 media URL prevents reuse of the earlier tutorial from the browser cache.
 
-The opening states the problem explicitly in both narration and large on-screen
+The opening states the problem explicitly in large on-screen
 sentences: several football matches are live at once, viewers want the best
 moments from each game live instead of later as replays, but can focus on only
 one match at a time. Generic match tiles alone are not the problem statement.
 This presents the product's purpose without promising every exciting event.
+Opening text uses sentence case, including “each” and “Live as they happen”,
+with amber highlighting. The bridge reads exactly: “This is the problem
+Touchline was built to solve”.
 
 The Director definition is: “Your Director controls which match is currently
 shown on the main screen, and decides when to switch.” The diagram labels the
@@ -32,7 +34,7 @@ current implementation: a five-second observation window every **two** seconds
 (`streaming/runner.py` advances 30 frames at 15 fps). All Action is the default,
 and captions have an independent switch. The manual-selection/override tutorial
 segment is removed, including its narration and pointer demonstration.
-The narration and animation explicitly emphasize **all seven videos at the same
+The text and animation explicitly emphasize **all seven videos at the same
 time**, with every stream feeding the prediction model concurrently.
 
 The three styles change the Director's preference for its current match and
@@ -48,8 +50,8 @@ These are minimum gaps and evidence requirements, not fixed switch schedules.
 The tutorial must stay at most 105 seconds, within the existing 120-second setup
 hold. It must not extend the worker or frontend deadlines.
 
-The brand's spoken pronunciation is “touch line”; its displayed spelling stays
-Touchline. The tutorial contains no demo disclosure or zero-clock explanation.
+The displayed brand spelling is Touchline. The tutorial contains no demo
+disclosure or zero-clock explanation.
 The page immediately below the video says that the matches are recordings used
 to demonstrate Touchline and are not live. Readiness and playback still use the
 existing server contract; editing the tutorial does not change model cadence.
@@ -101,6 +103,12 @@ manual entry reconnects or makes another paid request. The tutorial's timer
 cannot replace the recorded failure reason or steal focus on a hidden transition.
 
 ## Verification
+
+The silent revision is 101.3 seconds and has no audio streams. Exported frames
+confirm sentence case and the exact “This is the problem Touchline was built to
+solve” bridge. All 252 frontend tests and the production build passed. Headless
+Edge confirmed silent autoplay, no sound button, mobile layout and the native
+video-end transition, with no paid AI startup requests.
 
 The explicit-opening revision is 100.3 seconds, with narration measured at
 -16.01 LUFS and -1.49 dB true peak. The exported opening frames visibly state
