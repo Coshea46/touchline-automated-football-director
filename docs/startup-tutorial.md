@@ -49,9 +49,11 @@ the UI distinguishes a stopped session from a connection failure.
 Both CPU and GPU deployments use `min_containers=0`, `buffer_containers=0` and
 a 30-second scale-down window. An open visitor connection still consumes CPU;
 active setup/Director sessions consume GPU. Storage and request charges remain.
-No periodic keepalive creates workers. The operator caps new public reservations
-to $10 beyond retained spending, with a $10 UTC-day cap. This application limit
-is not a provider invoice cap. A Director start reserves $2.60 conservatively.
+No periodic keepalive creates workers. The current reservation ceilings are
+$55.42 retained total and $22.80 per UTC day, including the owner's latest
+approved $5 increase. Earlier reservations remain counted. These application
+limits are not provider invoice caps. A Director start reserves $2.60
+conservatively.
 
 Cold GPU startup can still fail: one public attempt on 13 November had three
 worker connections time out at 110 seconds. GPU container placement now uses
@@ -81,6 +83,13 @@ production build. Regression coverage holds a ready group at zero throughout
 the tutorial, releases it on real playback, retains later pause shutdown, and
 checks hold/heartbeat expiry. The worker harness also waits 70.4 seconds before
 processing the first permitted five-second observation without restarting.
+A bounded real-model operator check then became ready in 14.571 seconds, held
+that ready group paused at zero for another 57.523 seconds, and received model
+scores from all seven sources after releasing playback. Owned worker shutdown
+and source cleanup were confirmed. This used a controlled operator permission
+clock, not browser playback, and a 120-second compute bound with a $0.75 durable
+reservation. Its earlier harness configuration failure also retains its $0.75
+reservation; no historic charges or uncertain permits were refunded.
 
 The tutorial revision passed 253 frontend tests and a production build. A
 headless Edge check with audible autoplay blocked confirmed muted playback,
