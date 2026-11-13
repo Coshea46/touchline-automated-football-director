@@ -10,9 +10,9 @@ from tests.support.ml_inference.client import control, sdk_fixture, session
 from tests.support.ml_inference.runner import Harness
 
 
-@pytest.mark.parametrize('hold_seconds', [45, 70.4])
+@pytest.mark.parametrize('hold_seconds', [45, 70.4, 105])
 def test_fast_ready_shard_waits_for_cohort_or_tutorial_then_scores_without_restart(monkeypatch, hold_seconds):
-    harness = Harness(monkeypatch, matches=1, seconds=90)
+    harness = Harness(monkeypatch, matches=1, seconds=120)
     harness.control_override = lambda h: {
         'position': max(0, h.clock.now - hold_seconds), 'playing': h.clock.now >= hold_seconds,
         'startup_waiting': h.clock.now < hold_seconds,

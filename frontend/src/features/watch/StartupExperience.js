@@ -59,7 +59,7 @@ export default function StartupExperience({ ready, onEnter, onCancel, cancelled,
         {retryAllowed && <button onClick={onRetry}>Try again</button>}
         {onManual && <button className="startup-cancel" onClick={onManual}>Continue without AI</button>}</> : <>
         {phase === 'tutorial' ? <>
-          <video ref={video} className="startup-video" src="/media/touchline-tutorial.mp4?v=2" autoPlay muted={muted} controls playsInline
+          <video ref={video} className="startup-video" src="/media/touchline-tutorial.mp4?v=3" autoPlay muted={muted} controls playsInline
             aria-label="Touchline tutorial" onVolumeChange={(event) => setMuted(event.currentTarget.muted || event.currentTarget.volume === 0)}
             onPlay={() => setPlayBlocked(false)} onEnded={() => setPhase('setup')} onError={() => setPhase('setup')} />
           {(muted || playBlocked) && <button className="startup-sound" onClick={enableSound}>{playBlocked ? 'Play tutorial with sound' : 'Turn sound on'}</button>}

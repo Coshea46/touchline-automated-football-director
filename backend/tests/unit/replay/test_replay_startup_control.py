@@ -45,7 +45,7 @@ def test_ready_workers_stay_held_during_long_tutorial_then_release_on_real_playb
             ready.update(state='ready', scores=[])
             session.accept_snapshot(ready)
             assert session.auto_available
-            for elapsed in (10, 40, 70):
+            for elapsed in (10, 40, 70, 105):
                 clock.value = 1000 + elapsed
                 session.receive('viewer', playback(session, playing=False))
                 packet = session.control()

@@ -1,6 +1,6 @@
 # On-demand startup tutorial
 
-Production opens a 70.4-second narrated Synthesia tutorial, then “Setting things up”,
+Production opens a 101-second narrated Synthesia tutorial, then “Setting things up”,
 then fades into the app only after the server reports the Director available.
 Fresh hosted sessions default to All Action; an explicitly saved viewer mode
 still overrides the default when the client joins.
@@ -14,15 +14,37 @@ served from Vercel; Synthesia is not called for each visitor.
 Video source: [Synthesia editor](https://app.synthesia.io/syren/video-edit/a9dde434-0998-4ac3-94b6-0b9ea47d6d17).
 The exported asset is `frontend/public/media/touchline-tutorial.mp4`.
 The website export preserves the 1920×1080 video stream and normalizes the AAC
-narration to -16 LUFS (measured -16.02 LUFS, -1.45 dB true peak). The versioned
+narration to -16 LUFS. The versioned
 media URL prevents reuse of the earlier tutorial from the browser cache.
 
-The tutorial explains the Director as the automatic match selector, the custom
+The opening describes overlapping matches on a Champions League night and the
+wish to follow exciting moments as they happen without constant manual stream
+switching or waiting for highlights afterward. It presents the product's purpose
+without promising that every exciting moment will be caught.
+
+The tutorial explains the Director as what chooses which match to watch and
+when to switch, the custom
 model built by Conor O’Shea, parallel analysis of all seven matches, and the
 separate internal scoring system that chooses the next match. It describes the
 current implementation: a five-second observation window every **two** seconds
 (`streaming/runner.py` advances 30 frames at 15 fps). All Action is the default,
 manual selection remains available, and captions have an independent switch.
+The narration and animation explicitly emphasize **all seven videos at the same
+time**, with every stream feeding the prediction model concurrently.
+
+The three styles change the Director's preference for its current match and
+switching rules, while keeping the prediction model unchanged:
+
+| Style | Viewer explanation | Current-match bonus | Minimum automatic switch gap | Winning observations |
+| --- | --- | --- | --- | --- |
+| All Action (default) | More sensitive to a better match; quicker to switch | +0.05 | 4 seconds | 1 |
+| Balanced | A middle course; waits for stronger, repeated evidence | +0.20 | 12 seconds | 2 consecutive |
+| Relaxed | Favours staying with the current game and longer spells between switches | +0.25 | 20 seconds | 3 consecutive |
+
+These are minimum gaps and evidence requirements, not fixed switch schedules.
+The tutorial must stay at most 105 seconds, within the existing 120-second setup
+hold. It must not extend the worker or frontend deadlines.
+
 The brand's spoken pronunciation is “touch line”; its displayed spelling stays
 Touchline. The tutorial contains no demo disclosure or zero-clock explanation.
 The page immediately below the video says that the matches are recordings used
@@ -40,7 +62,7 @@ cleanup. Retry explicitly creates a fresh session and is subject to admission.
 
 The setup hold also travels in the worker control packet's `startup_waiting`
 flag after the whole group reports ready. Otherwise the worker's normal
-30-second pause guard could stop it before the 70.4-second tutorial finishes.
+30-second pause guard could stop it before the tutorial finishes.
 The first accepted playing report consumes this hold; a later pause cannot
 restore it. The existing two-minute bound, heartbeat expiry and owned shutdown
 still apply. Worker terminal diagnostics use bounded labels in backend logs;
@@ -76,6 +98,17 @@ manual entry reconnects or makes another paid request. The tutorial's timer
 cannot replace the recorded failure reason or steal focus on a hidden transition.
 
 ## Verification
+
+The problem-first revision is 100.97 seconds, with AAC narration measured at
+-16.00 LUFS and -1.43 dB true peak. Its opening, simultaneous seven-stream
+diagram, and three mode explanations were inspected from the shipped export.
+The startup regression suites pass at a 105-second hold, including the normal
+120-second upper bound and scoring only after permission advances. No runtime
+deadline, mode setting or public reservation allowance changed for this edit.
+The production build and startup frontend tests passed. Headless Edge checked
+the actual revised MP4's duration, muted autoplay fallback, one-click sound,
+mobile layout and native media-end transition, with backend sockets intercepted
+and no paid startup requests.
 
 The tutorial worker-hold fix passed 466 tests across replay, streaming and hosted
 backend suites, the installed-wheel checks, the startup frontend tests and the
