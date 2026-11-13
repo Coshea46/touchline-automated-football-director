@@ -15,6 +15,12 @@ conservatively on both dates. These are application compute estimates, not an
 AWS/Modal invoice cap; storage, traffic and subscriptions are separate.
 Daily accounting requires DynamoDB; local SQLite keeps its legacy funding mode.
 See [startup flow](startup-tutorial.md).
+Daily accounting passed 84 hosted tests and installed-wheel checks. A public
+startup check reserved $2.60, then settled to $0.686763 after confirmed shutdown,
+leaving zero open reservations and $7.313237 of the day's allowance. The check
+sent one setup request, entered after the 101.3-second tutorial, advanced native
+playback and closed the browser without errors. This amount is an application
+estimate, not a measured provider bill.
 Earlier warm-capacity and $100 settings below describe the prior deployment.
 
 The website's CPU deployment is separate from the existing GPU inference app:
