@@ -29,8 +29,8 @@ export default function StartupExperience({ ready, onEnter, onCancel, cancelled,
         {phase === 'tutorial' ? <>
           <video ref={video} className="startup-video" src="/media/touchline-tutorial.mp4?v=5" autoPlay muted controls playsInline
             aria-label="Touchline tutorial" onEnded={() => setPhase('setup')} onError={() => setPhase('setup')} />
-          <p>{cancelled ? 'You can finish the tutorial, then continue without AI.' : 'A quick introduction while your Director gets ready.'}</p>
-          <p className="startup-detail">The matches shown here are recordings used to demonstrate Touchline. They are not live.</p>
+          <p>{cancelled ? 'App will automatically start after tutorial' : 'A quick introduction while your Director gets ready.'}</p>
+          <p className="startup-detail"><strong>Disclamer</strong><br />The matches shown here are recordings used to demonstrate Touchline. They are not live.</p>
           {cancelled && notice && <p role="status" aria-live="polite" className="startup-detail">{notice}</p>}
           <button onClick={() => { video.current?.pause(); setPhase('setup'); }}>Skip tutorial</button>
         </> : <>
