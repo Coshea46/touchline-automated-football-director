@@ -58,7 +58,7 @@ export default function directorViewState({ connection, sessionState, backendErr
         : sessionState?.mode === 'real' ? 'Trained model' : 'No inference session');
   const now = uiNow / 1000 + serverSkew;
   const monitoring = connection === 'connected' && ['running', 'degraded'].includes(sessionState?.state);
-  const mode = director?.mode || 'balanced';
+  const mode = director?.mode || 'all_action';
   const scoreFresh = Boolean(monitoring && director && director.scores_fresh !== false
     && Number.isFinite(director.scores_produced_at) && now - director.scores_produced_at <= 6
     && (!Number.isFinite(director.scores_valid_until) || director.scores_valid_until > now));

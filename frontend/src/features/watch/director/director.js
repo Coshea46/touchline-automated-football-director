@@ -5,7 +5,7 @@ export const DIRECTOR_MODES = {
 };
 export const MODE_STORAGE_KEY = 'matchpulse-director-mode';
 
-export function preferredMode(fallback = 'balanced') {
+export function preferredMode(fallback = 'all_action') {
   try {
     const value = localStorage.getItem(MODE_STORAGE_KEY);
     return Object.hasOwn(DIRECTOR_MODES, value) ? value : fallback;

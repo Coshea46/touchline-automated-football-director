@@ -2,6 +2,8 @@
 
 Production opens a 44.7-second Synthesia tutorial, then “Setting things up”,
 then fades into the app only after the server reports the Director available.
+Fresh hosted sessions default to All Action; an explicitly saved viewer mode
+still overrides the default when the client joins.
 Skip advances to setup, not past readiness. Narration can be enabled with the
 native video controls; muted autoplay supports browser playback policies.
 The generated illustrative interface is labeled as such. The static MP4 is

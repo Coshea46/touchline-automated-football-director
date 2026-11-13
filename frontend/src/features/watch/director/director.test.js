@@ -21,6 +21,8 @@ test('selection history is bounded to factual registered sources and valid event
 
 test('display times and stored preferences do not invent settings or match metadata', () => {
   localStorage.setItem('matchpulse-director-mode', 'bad');
+  expect(preferredMode()).toBe('all_action');
+  localStorage.setItem('matchpulse-director-mode', 'balanced');
   expect(preferredMode()).toBe('balanced');
   localStorage.setItem('matchpulse-director-mode', 'all_action');
   expect(preferredMode()).toBe('all_action');

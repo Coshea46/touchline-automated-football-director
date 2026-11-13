@@ -18,6 +18,8 @@ def test_custom_source_offsets_and_inherited_monitor_flags_cannot_shift_a_fresh_
             assert session.position == 0 and session.sources[0].offset_seconds == 0
             assert not session.director.auto_enabled and not session.config.monitor
             assert session.bridge is None and not session._caption_enabled
+            assert session.director.director_mode == "all_action"
+            assert session._prepared_config.director_mode == "all_action"
             assert session._prepared_config.max_duration_seconds == 1200
             assert session._prepared_config.max_estimated_cost_usd == 2.60
             assert session.caption_max_audio_seconds == 1200
