@@ -45,3 +45,5 @@ check correctly stayed paused but was denied by the conservative spending cap.
 The cap was corrected from an authoritative read of the retained ledger, not by
 refunding reservations. The final recorder samples overlay presence synchronously
 at each native WebSocket send without changing its payload, and passed.
+After the final check, Modal reported zero CPU/GPU runners, zero running inputs
+and zero backlog. Both deployed services remained available on demand.
